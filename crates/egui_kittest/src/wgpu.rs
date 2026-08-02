@@ -253,6 +253,7 @@ impl crate::TestRenderer for WgpuTestRenderer {
                 &self.render_state.queue,
                 &mut encoder,
                 &tessellated,
+                &screen,
                 cursor,
                 &texture,
                 backdrop_texture,
