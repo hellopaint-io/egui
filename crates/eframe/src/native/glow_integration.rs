@@ -8,7 +8,8 @@
 #![expect(clippy::undocumented_unsafe_blocks)]
 #![expect(clippy::unwrap_used)]
 
-use std::{cell::RefCell, num::NonZeroU32, rc::Rc, sync::Arc, time::Instant};
+use core::{cell::RefCell, num::NonZeroU32};
+use std::{rc::Rc, sync::Arc, time::Instant};
 
 use egui_winit::ActionRequested;
 use glutin::{
@@ -31,15 +32,16 @@ use egui::{
 };
 #[cfg(feature = "accesskit")]
 use egui_winit::accesskit_winit;
-
-use crate::{
-    App, AppCreator, CreationContext, NativeOptions, Result, Storage,
-    native::{epi_integration::EpiIntegration, winit_integration::is_invisible_or_minimized},
-};
+use log::warn;
 
 use super::{
     epi_integration, event_loop_context,
     winit_integration::{EventResult, UserEvent, WinitApp, create_egui_context},
+};
+use crate::epaint::textures::TexturesDelta;
+use crate::{
+    App, AppCreator, CreationContext, NativeOptions, Result, Storage,
+    native::{epi_integration::EpiIntegration, winit_integration::sleep_if_invisible_or_minimized},
 };
 
 // ----------------------------------------------------------------------------
@@ -73,6 +75,16 @@ struct GlowWinitRunning<'app> {
 
     // NOTE: one painter shared by all viewports.
     painter: Rc<RefCell<egui_glow::Painter>>,
+
+    /// Any not yet applied deltas for this app.
+    pending_deltas: TexturesDelta,
+}
+
+impl Drop for GlowWinitRunning<'_> {
+    fn drop(&mut self) {
+        // Avoid debug panic when dropping unapplied deltas on teardown
+        self.pending_deltas.clear();
+    }
 }
 
 /// This struct will contain both persistent and temporary glutin state.
@@ -114,6 +126,9 @@ struct Viewport {
     info: ViewportInfo,
     actions_requested: Vec<egui_winit::ActionRequested>,
 
+    /// Any not yet applied deltas for this viewport.
+    pending_delta: TexturesDelta,
+
     /// The user-callback that shows the ui.
     /// None for immediate viewports.
     viewport_ui_cb: Option<Arc<DeferredViewportUiCallback>>,
@@ -123,6 +138,34 @@ struct Viewport {
     gl_surface: Option<glutin::surface::Surface<glutin::surface::WindowSurface>>,
     window: Option<Arc<Window>>,
     egui_winit: Option<egui_winit::State>,
+}
+
+impl Viewport {
+    /// Apply the commands, or defer them until we have a window.
+    fn process_commands(
+        &mut self,
+        egui_ctx: &egui::Context,
+        mut commands: Vec<egui::ViewportCommand>,
+    ) {
+        self.deferred_commands.append(&mut commands);
+
+        if let Some(window) = &self.window {
+            egui_winit::process_viewport_commands(
+                egui_ctx,
+                &mut self.info,
+                core::mem::take(&mut self.deferred_commands),
+                window,
+                &mut self.actions_requested,
+            );
+        }
+    }
+}
+
+impl Drop for Viewport {
+    fn drop(&mut self) {
+        // Avoid debug panic when dropping unapplied deltas on teardown
+        self.pending_delta.clear();
+    }
 }
 
 // ----------------------------------------------------------------------------
@@ -296,8 +339,10 @@ impl<'app> GlowWinitApp<'app> {
             log::warn!("set_cursor_hittest(false) failed: {err}");
         }
 
-        let app_creator = std::mem::take(&mut self.app_creator)
+        let app_creator = core::mem::take(&mut self.app_creator)
             .expect("Single-use AppCreator has unexpectedly already been taken");
+
+        crate::maybe_attach_inspection_plugin(&integration.egui_ctx, Some(self.app_name.clone()));
 
         let app: Box<dyn 'app + App> = {
             // Use latest raw_window_handle for eframe compatibility
@@ -351,6 +396,7 @@ impl<'app> GlowWinitApp<'app> {
             app,
             glutin,
             painter,
+            pending_deltas: Default::default(),
         }))
     }
 }
@@ -574,7 +620,7 @@ impl GlowWinitRunning<'_> {
             }
         }
 
-        let (raw_input, viewport_ui_cb, is_visible) = {
+        let (raw_input, viewport_ui_cb, is_visible, show_ui) = {
             let mut glutin = self.glutin.borrow_mut();
             let egui_ctx = glutin.egui_ctx.clone();
             let Some(viewport) = glutin.viewports.get_mut(&viewport_id) else {
@@ -593,6 +639,9 @@ impl GlowWinitRunning<'_> {
             let mut raw_input = egui_winit.take_egui_input(window);
             let viewport_ui_cb = viewport.viewport_ui_cb.clone();
 
+            let show_ui =
+                is_visible || is_viewport_or_descendant_visible(&glutin.viewports, viewport_id);
+
             self.integration.pre_update();
 
             raw_input.time = Some(self.integration.beginning.elapsed().as_secs_f64());
@@ -602,8 +651,57 @@ impl GlowWinitRunning<'_> {
                 .map(|(id, viewport)| (*id, viewport.info.clone()))
                 .collect();
 
-            (raw_input, viewport_ui_cb, is_visible)
+            (raw_input, viewport_ui_cb, is_visible, show_ui)
         };
+
+        if !show_ui {
+            // Nothing will be shown, so we run no egui pass at all.
+            // That way all ui state is left untouched, and is still there
+            // when this viewport becomes visible again.
+            let is_root_viewport = viewport_ui_cb.is_none();
+            if is_root_viewport {
+                // The app logic keeps ticking, so it can e.g. ask to be shown again:
+                let egui::LogicOutput {
+                    platform_output,
+                    viewport_commands,
+                } = self
+                    .integration
+                    .update_logic_only(self.app.as_mut(), raw_input);
+
+                let mut glutin = self.glutin.borrow_mut();
+                if let Some(viewport) = glutin.viewports.get_mut(&viewport_id) {
+                    viewport.info.events.clear(); // they should have been processed
+                    if let Some(window) = viewport.window.clone()
+                        && let Some(egui_winit) = viewport.egui_winit.as_mut()
+                    {
+                        egui_winit.handle_platform_output_with_event_loop(
+                            &window,
+                            event_loop,
+                            platform_output,
+                        );
+                    }
+                }
+                for (id, commands) in viewport_commands {
+                    if let Some(viewport) = glutin.viewports.get_mut(&id) {
+                        viewport.process_commands(&self.integration.egui_ctx, commands);
+                    }
+                }
+            }
+
+            sleep_if_invisible_or_minimized(
+                self.glutin
+                    .borrow()
+                    .viewports
+                    .get(&viewport_id)
+                    .and_then(|viewport| viewport.window.as_deref()),
+            );
+
+            return Ok(if self.integration.should_close() {
+                EventResult::CloseRequested
+            } else {
+                EventResult::Wait
+            });
+        }
 
         // HACK: In order to get the right clear_color, the system theme needs to be set, which
         // usually only happens in the `update` call. So we call Options::begin_pass early
@@ -653,12 +751,9 @@ impl GlowWinitRunning<'_> {
         // The update function, which could call immediate viewports,
         // so make sure we don't hold any locks here required by the immediate viewports rendeer.
 
-        let full_output = self.integration.update(
-            self.app.as_mut(),
-            viewport_ui_cb.as_deref(),
-            raw_input,
-            is_visible,
-        );
+        let full_output =
+            self.integration
+                .update(self.app.as_mut(), viewport_ui_cb.as_deref(), raw_input);
 
         // ------------------------------------------------------------
 
@@ -667,6 +762,7 @@ impl GlowWinitRunning<'_> {
             app,
             glutin,
             painter,
+            pending_deltas,
             ..
         } = self;
 
@@ -680,6 +776,7 @@ impl GlowWinitRunning<'_> {
             pixels_per_point,
             viewport_output,
         } = full_output;
+        pending_deltas.append(textures_delta);
 
         glutin.remove_viewports_not_in(&viewport_output);
 
@@ -721,7 +818,7 @@ impl GlowWinitRunning<'_> {
                 screen_size_in_pixels,
                 pixels_per_point,
                 &clipped_primitives,
-                &textures_delta,
+                pending_deltas,
             );
 
             {
@@ -790,14 +887,7 @@ impl GlowWinitRunning<'_> {
 
         integration.maybe_autosave(app.as_mut(), Some(&window));
 
-        if is_invisible_or_minimized(&window) {
-            // On Mac, a minimized Window uses up all CPU:
-            // https://github.com/emilk/egui/issues/325
-            // On Windows, an invisible window also uses up all CPU:
-            // https://github.com/emilk/egui/issues/7776
-            profiling::scope!("minimized_sleep");
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
+        sleep_if_invisible_or_minimized(Some(&window));
 
         if integration.should_close() {
             Ok(EventResult::CloseRequested)
@@ -1127,6 +1217,7 @@ impl GlutinWindowContext {
                 deferred_commands: vec![],
                 info: viewport_info,
                 actions_requested: Default::default(),
+                pending_delta: Default::default(),
                 viewport_ui_cb: None,
                 gl_surface: None,
                 window: window.map(Arc::new),
@@ -1337,7 +1428,7 @@ impl GlutinWindowContext {
         }
     }
 
-    fn get_proc_address(&self, addr: &std::ffi::CStr) -> *const std::ffi::c_void {
+    fn get_proc_address(&self, addr: &core::ffi::CStr) -> *const core::ffi::c_void {
         self.gl_config.display().get_proc_address(addr)
     }
 
@@ -1369,7 +1460,7 @@ impl GlutinWindowContext {
                 class,
                 builder,
                 viewport_ui_cb,
-                mut commands,
+                commands,
                 repaint_delay: _, // ignored - we listened to the repaint callback instead
             },
         ) in viewport_output.clone()
@@ -1384,25 +1475,18 @@ impl GlutinWindowContext {
                 viewport_ui_cb,
             );
 
-            if let Some(window) = &viewport.window {
-                let old_inner_size = window.inner_size();
+            let old_inner_size = viewport.window.as_ref().map(|window| window.inner_size());
 
-                viewport.deferred_commands.append(&mut commands);
+            viewport.process_commands(egui_ctx, commands);
 
-                egui_winit::process_viewport_commands(
-                    egui_ctx,
-                    &mut viewport.info,
-                    std::mem::take(&mut viewport.deferred_commands),
-                    window,
-                    &mut viewport.actions_requested,
-                );
-
-                // For Wayland : https://github.com/emilk/egui/issues/4196
-                if cfg!(target_os = "linux") {
-                    let new_inner_size = window.inner_size();
-                    if new_inner_size != old_inner_size {
-                        self.resize(viewport_id, new_inner_size);
-                    }
+            // For Wayland : https://github.com/emilk/egui/issues/4196
+            if cfg!(target_os = "linux")
+                && let Some(window) = &viewport.window
+                && let Some(old_inner_size) = old_inner_size
+            {
+                let new_inner_size = window.inner_size();
+                if new_inner_size != old_inner_size {
+                    self.resize(viewport_id, new_inner_size);
                 }
             }
         }
@@ -1443,6 +1527,7 @@ fn initialize_or_update_viewport(
                 deferred_commands: vec![],
                 info: Default::default(),
                 actions_requested: Default::default(),
+                pending_delta: Default::default(),
                 viewport_ui_cb,
                 window: None,
                 egui_winit: None,
@@ -1476,6 +1561,28 @@ fn initialize_or_update_viewport(
             entry.into_mut()
         }
     }
+}
+
+/// Is this viewport, or any of its (transitive) descendant viewports, visible?
+///
+/// Immediate viewports are rendered inline while their parent's UI runs, so even
+/// if this viewport's window is occluded or minimized we must still run its UI to
+/// give any visible descendant a chance to be painted.
+fn is_viewport_or_descendant_visible(
+    viewports: &OrderedViewportIdMap<Viewport>,
+    viewport_id: ViewportId,
+) -> bool {
+    let Some(viewport) = viewports.get(&viewport_id) else {
+        return false;
+    };
+    if viewport.info.visible().unwrap_or(true) {
+        return true;
+    }
+    viewports.values().any(|child| {
+        child.ids.parent == viewport_id
+            && child.ids.this != viewport_id // ROOT is its own parent; avoid self-recursion.
+            && is_viewport_or_descendant_visible(viewports, child.ids.this)
+    })
 }
 
 /// This is called (via a callback) by user code to render immediate viewports,
@@ -1569,8 +1676,10 @@ fn render_immediate_viewport(
     } = &mut *glutin;
 
     let Some(viewport) = viewports.get_mut(&viewport_id) else {
+        warn!("Viewport disappeared unexpectedly!");
         return;
     };
+    viewport.pending_delta.append(textures_delta);
 
     viewport.info.events.clear(); // they should have been processed
 
@@ -1606,7 +1715,7 @@ fn render_immediate_viewport(
         screen_size_in_pixels,
         pixels_per_point,
         &clipped_primitives,
-        &textures_delta,
+        &mut viewport.pending_delta,
     );
 
     {

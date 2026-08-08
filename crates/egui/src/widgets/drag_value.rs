@@ -3,8 +3,8 @@ use crate::{
     Modifiers, NumExt as _, Response, RichText, Sense, TextEdit, TextWrapMode, Ui, Widget,
     WidgetInfo, emath, text,
 };
+use core::{cmp::Ordering, ops::RangeInclusive};
 use emath::Vec2;
-use std::{cmp::Ordering, ops::RangeInclusive};
 
 // ----------------------------------------------------------------------------
 
@@ -409,6 +409,13 @@ impl<'a> DragValue<'a> {
         self.update_while_editing = update;
         self
     }
+
+    /// Output the [`DragValue`]'s [`Atoms`].
+    ///
+    /// This includes any images you have on the [`DragValue`].
+    pub fn atoms(&self) -> &Atoms<'a> {
+        &self.atoms
+    }
 }
 
 impl Widget for DragValue<'_> {
@@ -773,7 +780,7 @@ mod tests {
     macro_rules! total_assert_eq {
         ($a:expr, $b:expr) => {
             assert!(
-                matches!($a.total_cmp(&$b), std::cmp::Ordering::Equal),
+                matches!($a.total_cmp(&$b), core::cmp::Ordering::Equal),
                 "{} != {}",
                 $a,
                 $b

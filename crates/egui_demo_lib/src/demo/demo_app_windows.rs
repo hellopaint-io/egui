@@ -13,7 +13,7 @@ struct DemoGroup {
     demos: Vec<Box<dyn Demo>>,
 }
 
-impl std::ops::Add for DemoGroup {
+impl core::ops::Add for DemoGroup {
     type Output = Self;
 
     fn add(self, other: Self) -> Self {
@@ -45,6 +45,12 @@ impl DemoGroup {
             let mut is_open = open.contains(demo.name());
             demo.show(ui, &mut is_open);
             set_open(open, demo.name(), is_open);
+        }
+    }
+
+    pub fn logic(&mut self, ctx: &egui::Context) {
+        for demo in &mut self.demos {
+            demo.logic(ctx);
         }
     }
 }
@@ -160,6 +166,11 @@ impl DemoGroups {
         demos.windows(ui, open);
         tests.windows(ui, open);
     }
+
+    pub fn logic(&mut self, ctx: &egui::Context) {
+        self.demos.logic(ctx);
+        self.tests.logic(ctx);
+    }
 }
 
 // ----------------------------------------------------------------------------
@@ -210,6 +221,13 @@ impl DemoWindows {
         } else {
             self.desktop_ui(ui);
         }
+    }
+
+    /// Run background logic for all demos.
+    ///
+    /// Called every frame, even when hidden, so demos can keep working in the background.
+    pub fn logic(&mut self, ctx: &egui::Context) {
+        self.groups.logic(ctx);
     }
 
     fn about_is_open(&self) -> bool {

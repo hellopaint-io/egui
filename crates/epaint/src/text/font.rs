@@ -117,7 +117,6 @@ impl SubpixelBin {
         let trunc = pos as i32;
         let fract = pos - trunc as f32;
 
-        #[expect(clippy::collapsible_else_if)]
         if pos.is_sign_negative() {
             if fract > -0.125 {
                 (trunc, Self::Zero)
@@ -225,6 +224,7 @@ impl FontCell {
         glyph_id: GlyphId,
         bin: SubpixelBin,
         location: skrifa::instance::LocationRef<'_>,
+        hinting_target: skrifa::outline::Target,
     ) -> Option<GlyphAllocation> {
         debug_assert!(
             glyph_id != skrifa::GlyphId::NOTDEF,
@@ -244,18 +244,10 @@ impl FontCell {
                 let size = skrifa::instance::Size::new(metrics.scale);
                 if hinting_instance.size() != size
                     || hinting_instance.location().coords() != location.coords()
+                    || hinting_instance.target() != hinting_target
                 {
                     hinting_instance
-                        .reconfigure(
-                            &font_data.outline_glyphs,
-                            size,
-                            location,
-                            skrifa::outline::Target::Smooth {
-                                mode: skrifa::outline::SmoothMode::Normal,
-                                symmetric_rendering: true,
-                                preserve_linear_metrics: true,
-                            },
-                        )
+                        .reconfigure(&font_data.outline_glyphs, size, location, hinting_target)
                         .ok()?;
                 }
                 let draw_settings = skrifa::outline::DrawSettings::hinted(hinting_instance, false);
@@ -284,7 +276,7 @@ impl FontCell {
             ctx.fill_path(&path);
             let mut dest = vello_cpu::Pixmap::new(width, height);
             let mut resources = vello_cpu::Resources::new();
-            ctx.render_to_pixmap(&mut resources, &mut dest);
+            ctx.render(&mut dest, &mut resources);
 
             let glyph_pos = {
                 let color_transfer_function = atlas.options().color_transfer_function;
@@ -395,7 +387,7 @@ impl FontFace {
         font_data: Blob,
         index: u32,
         tweak: FontTweak,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self, Box<dyn core::error::Error>> {
         let font = FontCell::try_new(font_data, |font_data| {
             let skrifa_font =
                 skrifa::FontRef::from_index(AsRef::<[u8]>::as_ref(font_data.as_ref()), index)?;
@@ -427,7 +419,7 @@ impl FontFace {
                 })
                 .flatten();
 
-            Ok::<DependentFontData<'_>, Box<dyn std::error::Error>>(DependentFontData {
+            Ok::<DependentFontData<'_>, Box<dyn core::error::Error>>(DependentFontData {
                 skrifa: skrifa_font,
                 charmap,
                 outline_glyphs: glyphs,
@@ -589,7 +581,7 @@ impl FontFace {
         let axes = font_data.skrifa.axes();
         // Override the default coordinates with ones specified via FontTweak, then the ones specified directly via the
         // argument (probably from TextFormat).
-        let settings = std::iter::chain(self.tweak.coords.as_ref(), coords.as_ref());
+        let settings = core::iter::chain(self.tweak.coords.as_ref(), coords.as_ref());
         let location = axes.location(settings);
         let location_hash = LocationHash::new(&location);
 
@@ -669,9 +661,17 @@ impl FontFace {
 
         let cache_key = GlyphCacheKey::new(glyph_id, metrics, bin);
 
+        let hinting_target = self.tweak.hinting_target.into();
         let alloc = *self.glyph_alloc_cache.entry(cache_key).or_insert_with(|| {
             self.font
-                .allocate_glyph_uncached(atlas, metrics, glyph_id, bin, (&metrics.location).into())
+                .allocate_glyph_uncached(
+                    atlas,
+                    metrics,
+                    glyph_id,
+                    bin,
+                    (&metrics.location).into(),
+                    hinting_target,
+                )
                 .unwrap_or_default()
         });
 

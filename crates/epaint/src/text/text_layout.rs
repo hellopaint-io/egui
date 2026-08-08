@@ -1,7 +1,7 @@
 #![expect(clippy::unwrap_used)] // TODO(emilk): remove unwraps
 
+use core::{iter, ops::Range};
 use std::sync::Arc;
-use std::{iter, ops::Range};
 
 use emath::{Align, GuiRounding as _, NumExt as _, Pos2, Rect, Vec2, pos2, vec2};
 
@@ -9,14 +9,15 @@ use crate::{
     Color32, Mesh, Stroke, Vertex,
     stroke::PathStroke,
     text::{
+        ByteIndex, ByteRange,
         font::{StyledMetrics, UvRect, is_cjk, is_cjk_break_allowed},
         fonts::FontFaceKey,
     },
 };
 
 use super::{
-    FontsImpl, Galley, Glyph, LayoutJob, LayoutSection, PlacedRow, Row, RowVisuals,
-    VariationCoords,
+    ByteRangeExt as _, FontsImpl, Galley, Glyph, LayoutJob, LayoutSection, PlacedRow, Row,
+    RowVisuals, VariationCoords,
     font::{Font, FontFace, ShapedGlyph},
 };
 
@@ -99,6 +100,8 @@ impl Paragraph {
 /// since that memoizes the input, making subsequent layouting of the same text much faster.
 pub fn layout(fonts: &mut FontsImpl, pixels_per_point: f32, job: Arc<LayoutJob>) -> Galley {
     profiling::function_scope!();
+
+    job.debug_sanity_check();
 
     if job.wrap.max_rows == 0 {
         // Early-out: no text
@@ -215,7 +218,7 @@ struct TextRun {
     font_key: FontFaceKey,
 
     /// Byte range within the section text.
-    byte_range: std::ops::Range<usize>,
+    byte_range: ByteRange,
 }
 
 /// Emit shaped glyphs from a [`harfrust::GlyphBuffer`] into a [`Paragraph`].
@@ -467,7 +470,7 @@ fn layout_section(
     }
     paragraph.cursor_x_px += leading_space * pixels_per_point;
 
-    let section_text = &job.text[byte_range.clone()];
+    let section_text = &job.text[byte_range.as_usize()];
     let mut ctx = ShapingContext {
         pixels_per_point,
         font_size,
@@ -483,8 +486,7 @@ fn layout_section(
     // Process each paragraph segment (split on newlines — the shaper can't handle them).
     for (seg_idx, segment) in SplitOrWhole::new(section_text, job.break_on_newline).enumerate() {
         if 0 < seg_idx {
-            out_paragraphs.push(Paragraph::from_section_index(section_index));
-            paragraph = out_paragraphs.last_mut().unwrap();
+            paragraph = out_paragraphs.push_mut(Paragraph::from_section_index(section_index));
             paragraph.empty_paragraph_height = line_height;
             ctx.is_first_glyph_in_section = true;
         }
@@ -497,7 +499,7 @@ fn layout_section(
 
         let num_runs = runs.len();
         for (run_idx, run) in runs.iter().enumerate() {
-            let run_text = &segment[run.byte_range.clone()];
+            let run_text = &segment[run.byte_range.as_usize()];
             let Some(font_face) = font.fonts_by_id.get(&run.font_key) else {
                 continue;
             };
@@ -536,7 +538,7 @@ fn layout_section(
 /// Iterator that either splits on `'\n'` or yields the whole string once.
 /// Avoids `Box<dyn Iterator>` and `Vec<&str>` allocation.
 enum SplitOrWhole<'a> {
-    Split(std::str::Split<'a, char>),
+    Split(core::str::Split<'a, char>),
     Whole(iter::Once<&'a str>),
 }
 
@@ -584,7 +586,7 @@ fn calculate_intrinsic_size(
             .glyphs
             .iter()
             .map(|g| g.line_height)
-            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .max_by(|a, b| a.partial_cmp(b).unwrap_or(core::cmp::Ordering::Equal))
             .unwrap_or(paragraph.empty_paragraph_height);
         if idx == 0 {
             height = f32::max(height, job.first_row_min_height);
@@ -1387,6 +1389,7 @@ fn segment_into_runs(font: &mut Font<'_>, text: &str, out: &mut Vec<TextRun>) {
     out.clear();
 
     for (byte_offset, grapheme_str) in text.grapheme_indices(true) {
+        let byte_offset = ByteIndex(byte_offset);
         let byte_end = byte_offset + grapheme_str.len();
 
         let base_char = grapheme_str.chars().next().unwrap_or(' ');
@@ -1443,14 +1446,14 @@ fn shape_text(
     buffer.push_str(text);
     buffer.guess_segment_properties();
 
-    shaper.shape(buffer, &[])
+    shaper.shape(buffer, harfrust::ShapeOptions::new())
 }
 
 // ----------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
-    use std::iter;
+    use core::iter;
 
     use super::{super::*, *};
     use crate::text::cursor::CCursor;
@@ -1588,7 +1591,7 @@ mod tests {
                     pixels_per_point,
                     Arc::new(LayoutJob::single_section(
                         iter::chain(
-                            (0..elided_galley.rows[0].char_count_excluding_newline()).map(|_| ch),
+                            (0..elided_galley.rows[0].char_count_excluding_newline().0).map(|_| ch),
                             iter::once('…'),
                         )
                         .collect::<String>(),
@@ -1876,11 +1879,11 @@ mod tests {
 
             // Verify that Row::text() reconstructs the input text.
             let row_text: String = galley.rows.iter().map(|r| r.text()).collect();
-            assert_eq!(row_text, text, "Row::text() mismatch for {text:?}",);
+            assert_eq!(row_text, text, "Row::text() mismatch for {text:?}");
 
             // Verify cursor round-trip: end cursor index == char count.
             assert_eq!(
-                galley.end().index,
+                galley.end().index.0,
                 expected_chars,
                 "Galley::end().index mismatch for {text:?}",
             );
@@ -1906,9 +1909,9 @@ mod tests {
         let galley = layout(&mut fonts, pixels_per_point, job.into());
 
         // Walking through every cursor index should produce valid positions.
-        for i in 0..=galley.end().index {
+        for i in 0..=galley.end().index.0 {
             let cursor = CCursor {
-                index: i,
+                index: CharIndex(i),
                 prefer_next_row: false,
             };
             let rect = galley.pos_from_cursor(cursor);

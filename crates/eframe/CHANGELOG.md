@@ -7,6 +7,47 @@ This file is updated upon each release.
 Changes since the last release can be found at <https://github.com/emilk/egui/compare/latest...HEAD> or by running the `scripts/generate_changelog.py` script.
 
 
+## 0.36.1 - 2026-08-07
+Nothing new
+
+
+## 0.36.0 - 2026-08-05
+### 🔧 Changed
+* Improve robustness of text input handling for `eframe/web` [#8045](https://github.com/emilk/egui/pull/8045) by [@umajho](https://github.com/umajho)
+* Eframe: make webbrowser dependency optional [#8372](https://github.com/emilk/egui/pull/8372) by [@wyvernbw](https://github.com/wyvernbw)
+* Store `web_sys::File` inside of `DroppedFile` [#8354](https://github.com/emilk/egui/pull/8354) by [@grtlr](https://github.com/grtlr)
+
+### 🐛 Fixed
+* Web: don't scroll host page when text agent or canvas grabs focus [#8296](https://github.com/emilk/egui/pull/8296) by [@emilk](https://github.com/emilk)
+* Fix missing modifier events on eframe web, handle physical keys [#8345](https://github.com/emilk/egui/pull/8345) by [@lucasmerlin](https://github.com/lucasmerlin)
+* Web: Avoid panic from lost texture updates when loaded on a background tab [#8313](https://github.com/emilk/egui/pull/8313) by [@kevinmehall](https://github.com/kevinmehall)
+* Web: anchor the text agent to the canvas [#8297](https://github.com/emilk/egui/pull/8297) by [@emilk](https://github.com/emilk)
+* Never run an egui pass when nothing will be shown [#8387](https://github.com/emilk/egui/pull/8387) by [@emilk](https://github.com/emilk)
+
+
+## 0.35.0 - 2026-06-25
+### ⭐ Added
+* Add Context::set_cursor_image for OS-level custom cursors [#8155](https://github.com/emilk/egui/pull/8155) by [@all3f0r1](https://github.com/all3f0r1)
+* Feat: add `remove_string()` to storage trait [#8264](https://github.com/emilk/egui/pull/8264) by [@mikesk8r](https://github.com/mikesk8r)
+
+### 🔧 Changed
+* Delegate handling of IME interruptions to integrations to fix virtual keyboard flickering on web [#8078](https://github.com/emilk/egui/pull/8078) by [@umajho](https://github.com/umajho)
+* Wgpu: Allow configuring VSync and frame latency at runtime [#8114](https://github.com/emilk/egui/pull/8114) by [@emilk](https://github.com/emilk)
+* Group `glow` config in a `struct` [#8108](https://github.com/emilk/egui/pull/8108) by [@TapGhoul](https://github.com/TapGhoul)
+* Choose restored window monitor by overlap [#8191](https://github.com/emilk/egui/pull/8191) by [@YelovSK](https://github.com/YelovSK)
+* Configure wgpu to be low-latency by default [#8203](https://github.com/emilk/egui/pull/8203) by [@lucasmerlin](https://github.com/lucasmerlin)
+
+### 🔥 Removed
+* Remove everything that was marked `#[deprecated]` [#8105](https://github.com/emilk/egui/pull/8105) by [@emilk](https://github.com/emilk)
+
+### 🐛 Fixed
+* Prevent entire page from scrolling out of view in Chrome (WASM) [#7888](https://github.com/emilk/egui/pull/7888) by [@rustbasic](https://github.com/rustbasic)
+* Fix crash when parent viewport is hidden [#8226](https://github.com/emilk/egui/pull/8226) by [@kpouer](https://github.com/kpouer)
+* Fix "drunk text" bug [#8250](https://github.com/emilk/egui/pull/8250) by [@emilk](https://github.com/emilk)
+* Call `logic` even while browser tab is in background [#8257](https://github.com/emilk/egui/pull/8257) by [@lucasmerlin](https://github.com/lucasmerlin)
+* Fix macOS wgpu live resize with low-latency surfaces [#8229](https://github.com/emilk/egui/pull/8229) by [@yay](https://github.com/yay)
+
+
 ## 0.34.3 - 2026-05-27
 * Default `app_id` to `app_name` on native [#8172](https://github.com/emilk/egui/pull/8172) by [@grtlr](https://github.com/grtlr)
 * Add winit window access to `eframe::Frame` and `CreationContext` [#8205](https://github.com/emilk/egui/pull/8205) by [@emilk](https://github.com/emilk)
