@@ -395,6 +395,20 @@ impl WinitApp for GlowWinitApp<'_> {
         }
     }
 
+    fn app_suspended(&mut self) {
+        if let Some(running) = self.running.as_mut() {
+            let ctx = running.integration.egui_ctx.clone();
+            running.app.app_suspended(&ctx);
+        }
+    }
+
+    fn app_resumed(&mut self) {
+        if let Some(running) = self.running.as_mut() {
+            let ctx = running.integration.egui_ctx.clone();
+            running.app.app_resumed(&ctx);
+        }
+    }
+
     fn save_and_destroy(&mut self) {
         if let Some(mut running) = self.running.take() {
             profiling::function_scope!();

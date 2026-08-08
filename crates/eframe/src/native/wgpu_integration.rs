@@ -402,6 +402,22 @@ impl WinitApp for WgpuWinitApp<'_> {
         }
     }
 
+    fn app_suspended(&mut self) {
+        if let Some(running) = self.running.as_mut() {
+            // The context rather than the window: on android the window is
+            // already gone by the time this runs.
+            let ctx = running.integration.egui_ctx.clone();
+            running.app.app_suspended(&ctx);
+        }
+    }
+
+    fn app_resumed(&mut self) {
+        if let Some(running) = self.running.as_mut() {
+            let ctx = running.integration.egui_ctx.clone();
+            running.app.app_resumed(&ctx);
+        }
+    }
+
     fn run_ui_and_paint(
         &mut self,
         event_loop: &ActiveEventLoop,

@@ -263,6 +263,22 @@ impl<T: WinitApp> ApplicationHandler<UserEvent> for WinitAppWrapper<T> {
         });
     }
 
+    fn app_suspended(&mut self, event_loop: &ActiveEventLoop) {
+        profiling::scope!("Event::AppSuspended");
+
+        event_loop_context::with_event_loop_context(event_loop, move || {
+            self.winit_app.app_suspended();
+        });
+    }
+
+    fn app_resumed(&mut self, event_loop: &ActiveEventLoop) {
+        profiling::scope!("Event::AppResumed");
+
+        event_loop_context::with_event_loop_context(event_loop, move || {
+            self.winit_app.app_resumed();
+        });
+    }
+
     fn exiting(&mut self, event_loop: &ActiveEventLoop) {
         // On Mac, Cmd-Q we get here and then `run_app_on_demand` doesn't return (despite its name),
         // so we need to save state now:
@@ -520,6 +536,14 @@ impl ApplicationHandler<UserEvent> for EframeWinitApplication<'_> {
 
     fn suspended(&mut self, event_loop: &ActiveEventLoop) {
         self.wrapper.suspended(event_loop);
+    }
+
+    fn app_suspended(&mut self, event_loop: &ActiveEventLoop) {
+        self.wrapper.app_suspended(event_loop);
+    }
+
+    fn app_resumed(&mut self, event_loop: &ActiveEventLoop) {
+        self.wrapper.app_resumed(event_loop);
     }
 
     fn exiting(&mut self, event_loop: &ActiveEventLoop) {

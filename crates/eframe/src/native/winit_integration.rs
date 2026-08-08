@@ -95,6 +95,13 @@ pub trait WinitApp {
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) -> crate::Result<EventResult>;
 
+    /// The application went to the background. Distinct from [`Self::suspended`],
+    /// which is about the render surface — see [`crate::App::app_suspended`].
+    fn app_suspended(&mut self);
+
+    /// The application returned to the foreground.
+    fn app_resumed(&mut self);
+
     fn device_event(
         &mut self,
         event_loop: &ActiveEventLoop,
