@@ -790,10 +790,14 @@ impl ScrollArea {
         state.offset.x = offset_x.unwrap_or(state.offset.x);
         state.offset.y = offset_y.unwrap_or(state.offset.y);
 
-        let show_bars: Vec2b = match scroll_bar_visibility {
-            ScrollBarVisibility::AlwaysHidden => Vec2b::FALSE,
-            ScrollBarVisibility::VisibleWhenNeeded => state.show_scroll,
-            ScrollBarVisibility::AlwaysVisible => direction_enabled,
+        let show_bars: Vec2b = if !ui.spacing().scroll.bar_mode.is_visible() {
+            Vec2b::FALSE
+        } else {
+            match scroll_bar_visibility {
+                ScrollBarVisibility::AlwaysHidden => Vec2b::FALSE,
+                ScrollBarVisibility::VisibleWhenNeeded => state.show_scroll,
+                ScrollBarVisibility::AlwaysVisible => direction_enabled,
+            }
         };
 
         let show_bars_factor = Vec2::new(
@@ -1403,10 +1407,14 @@ impl Prepared {
             }
         }
 
-        let show_scroll_this_frame = match scroll_bar_visibility {
-            ScrollBarVisibility::AlwaysHidden => Vec2b::FALSE,
-            ScrollBarVisibility::VisibleWhenNeeded => content_is_too_large,
-            ScrollBarVisibility::AlwaysVisible => direction_enabled,
+        let show_scroll_this_frame = if !ui.spacing().scroll.bar_mode.is_visible() {
+            Vec2b::FALSE
+        } else {
+            match scroll_bar_visibility {
+                ScrollBarVisibility::AlwaysHidden => Vec2b::FALSE,
+                ScrollBarVisibility::VisibleWhenNeeded => content_is_too_large,
+                ScrollBarVisibility::AlwaysVisible => direction_enabled,
+            }
         };
 
         // Avoid frame delay; start showing scroll bar right away:
@@ -1473,7 +1481,11 @@ impl Prepared {
                 outer_rect.with_min_x(max_cross - full_width)
             };
 
-            let sense = if scroll_source.scroll_bar && ui.is_enabled() {
+            let interactive_bar = scroll_source.scroll_bar
+                && ui.is_enabled()
+                && scroll_style.bar_mode.is_interactive();
+
+            let sense = if interactive_bar {
                 Sense::CLICK | Sense::DRAG
             } else {
                 Sense::hover()
@@ -1490,7 +1502,9 @@ impl Prepared {
             // top/bottom of a horizontal scroll (d==0).
             // left/rigth of a vertical scroll (d==1).
             let cross = if scroll_style.floating {
-                let is_hovering_bar_area = response.hovered() || state.scroll_bar_interaction[d];
+                // A bar you can't grab shouldn't grow to invite you to grab it.
+                let is_hovering_bar_area =
+                    interactive_bar && (response.hovered() || state.scroll_bar_interaction[d]);
 
                 let is_hovering_bar_area_t = ui
                     .ctx()
@@ -1552,7 +1566,8 @@ impl Prepared {
 
             let handle_rect = calculate_handle_rect(d, &state.offset);
 
-            state.scroll_bar_interaction[d] = response.hovered() || response.dragged();
+            state.scroll_bar_interaction[d] =
+                interactive_bar && (response.hovered() || response.dragged());
 
             if let Some(pointer_pos) = response.interact_pointer_pos() {
                 let scroll_start_offset_from_top_left = state.scroll_start_offset_from_top_left[d]
@@ -1597,7 +1612,7 @@ impl Prepared {
                 // Avoid frame-delay by calculating a new handle rect:
                 let handle_rect = calculate_handle_rect(d, &state.offset);
 
-                let visuals = if scroll_source.scroll_bar && ui.is_enabled() {
+                let visuals = if interactive_bar {
                     // Pick visuals based on interaction with the handle.
                     // Remember that the response is for the whole scroll bar!
                     let is_hovering_handle = response.hovered()
@@ -1619,7 +1634,7 @@ impl Prepared {
                 };
 
                 let handle_opacity = if scroll_style.floating {
-                    if response.hovered() || response.dragged() {
+                    if interactive_bar && (response.hovered() || response.dragged()) {
                         scroll_style.interact_handle_opacity
                     } else {
                         let is_hovering_outer_rect_t = ui.ctx().animate_bool_responsive(
@@ -1637,7 +1652,7 @@ impl Prepared {
                 };
 
                 let background_opacity = if scroll_style.floating {
-                    if response.hovered() || response.dragged() {
+                    if interactive_bar && (response.hovered() || response.dragged()) {
                         scroll_style.interact_background_opacity
                     } else if is_hovering_outer_rect {
                         scroll_style.active_background_opacity

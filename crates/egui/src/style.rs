@@ -486,10 +486,20 @@ impl Spacing {
 /// * [`Self::solid`]
 /// * [`Self::thin`]
 /// * [`Self::floating`]
+///
+/// How much the user can do with the bars is a separate axis, see
+/// [`ScrollStyle::bar_mode`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[cfg_attr(feature = "serde", serde(default))]
 pub struct ScrollStyle {
+    /// Whether scroll bars are interactive, display-only, or not shown at all.
+    ///
+    /// Unlike [`crate::scroll_area::ScrollBarVisibility`], which is set per
+    /// [`crate::ScrollArea`], this applies to every scroll area using this
+    /// style.
+    pub bar_mode: ScrollBarMode,
+
     /// If `true`, scroll bars float above the content, partially covering it.
     ///
     /// If `false`, the scroll bars allocate space, shrinking the area
@@ -579,6 +589,46 @@ pub struct ScrollStyle {
     pub fade: ScrollFadeStyle,
 }
 
+/// How much the user can do with a scroll bar, set globally via
+/// [`ScrollStyle::bar_mode`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+pub enum ScrollBarMode {
+    /// The bar is painted, and can be clicked and dragged to scroll.
+    ///
+    /// This is the default.
+    #[default]
+    Interactive,
+
+    /// The bar is painted, showing how far you have scrolled, but ignores
+    /// clicks and drags. It also no longer expands on hover.
+    ///
+    /// Useful on touch screens, where a bar sitting at the edge of a scroll
+    /// area is easy to grab by accident when dragging the contents.
+    VisualOnly,
+
+    /// The bar is not painted, and takes up no space.
+    ///
+    /// You can still scroll with the scroll wheel and by dragging the
+    /// contents. Same effect as setting every scroll area to
+    /// [`crate::scroll_area::ScrollBarVisibility::AlwaysHidden`].
+    Hidden,
+}
+
+impl ScrollBarMode {
+    /// Can the bar be clicked and dragged?
+    #[inline]
+    pub fn is_interactive(&self) -> bool {
+        *self == Self::Interactive
+    }
+
+    /// Is the bar painted at all?
+    #[inline]
+    pub fn is_visible(&self) -> bool {
+        *self != Self::Hidden
+    }
+}
+
 impl Default for ScrollStyle {
     fn default() -> Self {
         Self::floating()
@@ -589,6 +639,7 @@ impl ScrollStyle {
     /// Solid scroll bars that always use up space
     pub fn solid() -> Self {
         Self {
+            bar_mode: ScrollBarMode::Interactive,
             floating: false,
             content_margin: Margin::ZERO,
             bar_width: 6.0,
@@ -651,7 +702,9 @@ impl ScrollStyle {
 
     /// Width of a solid vertical scrollbar, or height of a horizontal scroll bar, when it is at its widest.
     pub fn allocated_width(&self) -> f32 {
-        if self.floating {
+        if !self.bar_mode.is_visible() {
+            0.0
+        } else if self.floating {
             self.floating_allocated_width
         } else {
             self.bar_inner_margin + self.bar_width + self.bar_outer_margin
@@ -673,6 +726,8 @@ impl ScrollStyle {
 
     pub fn details_ui(&mut self, ui: &mut Ui) {
         let Self {
+            bar_mode,
+
             floating,
 
             content_margin,
@@ -700,6 +755,13 @@ impl ScrollStyle {
             ui.label("Type:");
             ui.selectable_value(floating, false, "Solid");
             ui.selectable_value(floating, true, "Floating");
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("Bars:");
+            ui.selectable_value(bar_mode, ScrollBarMode::Interactive, "Interactive");
+            ui.selectable_value(bar_mode, ScrollBarMode::VisualOnly, "Visual only");
+            ui.selectable_value(bar_mode, ScrollBarMode::Hidden, "Hidden");
         });
 
         ui.horizontal(|ui| {
