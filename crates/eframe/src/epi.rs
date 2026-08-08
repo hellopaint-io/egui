@@ -211,6 +211,30 @@ pub trait App {
     /// The path can be customized via [`NativeOptions::persistence_path`].
     fn save(&mut self, _storage: &mut dyn Storage) {}
 
+    /// Called when the application stops being visible to the user.
+    ///
+    /// This is the application lifecycle, not the window: it fires on Android's
+    /// `onStop` and iOS' `applicationDidEnterBackground`, and never on desktop or
+    /// web, which have no such notion.
+    ///
+    /// Unlike [`Self::update`], this still runs once the app is hidden — that is
+    /// the point of it. A hidden viewport is not painted, so `update` stops being
+    /// called exactly when a background transition happens, which makes it the
+    /// wrong place to release memory. Use this to drop what can be rebuilt on
+    /// [`Self::app_resumed`]; on iOS especially, this is the last code that runs
+    /// before the process is suspended, and the system gives no further warning
+    /// before killing a backgrounded app.
+    ///
+    /// May be called repeatedly without an intervening [`Self::app_resumed`].
+    fn app_suspended(&mut self, _ctx: &egui::Context) {}
+
+    /// Called when the application becomes visible to the user again, after
+    /// [`Self::app_suspended`].
+    ///
+    /// Fires on Android's `onStart` and iOS' `applicationWillEnterForeground`,
+    /// before the first frame of the resumed app is drawn.
+    fn app_resumed(&mut self, _ctx: &egui::Context) {}
+
     /// Called once on shutdown, after [`Self::save`].
     ///
     /// If you need to abort an exit check `ctx.input(|i| i.viewport().close_requested())`
