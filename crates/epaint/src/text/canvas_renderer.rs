@@ -157,10 +157,17 @@ impl CanvasGlyphRenderer {
             return None;
         }
 
-        // Extract image data (now at device pixel resolution)
+        // Extract image data (now at device pixel resolution).
+        // web-sys types the coordinates as `i32` only under `--cfg=web_sys_unstable_apis`.
+        #[cfg(web_sys_unstable_apis)]
         let image_data = self
             .context
             .get_image_data(0, 0, width as i32, height as i32)
+            .ok()?;
+        #[cfg(not(web_sys_unstable_apis))]
+        let image_data = self
+            .context
+            .get_image_data(0.0, 0.0, width as f64, height as f64)
             .ok()?;
 
         let rgba_data = image_data.data().0;
