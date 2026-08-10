@@ -1270,6 +1270,15 @@ impl Areas {
         self.visible_areas_last_frame.contains(layer_id)
     }
 
+    /// Has this layer been shown so far in the pass currently running?
+    ///
+    /// Unlike [`Self::is_visible`] this does not carry over from the previous pass, so it
+    /// answers "is this area up *now*" rather than "was it up recently". Only meaningful
+    /// while a pass is in progress, and only once the area in question would have run.
+    pub fn visible_this_frame(&self, layer_id: &LayerId) -> bool {
+        self.visible_areas_current_frame.contains(layer_id)
+    }
+
     pub fn is_visible(&self, layer_id: &LayerId) -> bool {
         self.visible_areas_last_frame.contains(layer_id)
             || self.visible_areas_current_frame.contains(layer_id)
