@@ -411,7 +411,24 @@ struct ContextImpl {
 
     is_accesskit_enabled: bool,
 
+    /// What each hosted viewport's last pass built for AccessKit.
+    ///
+    /// A hosted viewport is painted by the application, wherever it likes, so the tree its
+    /// pass produces is of no use to the integration on its own - see
+    /// [`Context::take_accesskit_subtree`].
+    hosted_accesskit: ViewportIdMap<AccessKitSubtree>,
+
     loaders: Arc<Loaders>,
+}
+
+/// What a hosted viewport's pass built for AccessKit.
+///
+/// Handed over by [`Context::take_accesskit_subtree`] and put somewhere by
+/// [`Context::graft_accesskit_subtree`]. Opaque on purpose: it is the inside of one pass'
+/// accessibility bookkeeping, and nothing outside egui can do anything with it but move it.
+#[derive(Clone, Default)]
+pub struct AccessKitSubtree {
+    nodes: Vec<(Id, accesskit::Node)>,
 }
 
 impl ContextImpl {
@@ -2722,6 +2739,17 @@ impl ContextImpl {
             let state = viewport.this_pass.accesskit_state.take();
             if let Some(state) = state {
                 let root_id = crate::accesskit_root_id().accesskit_id();
+                if viewport.class == ViewportClass::Hosted {
+                    // Keep the nodes as the ids that made them, since the only thing that
+                    // can place this tree is the viewport hosting it, and that has to be
+                    // able to move it to wherever it painted the child.
+                    self.hosted_accesskit.insert(
+                        ended_viewport_id,
+                        AccessKitSubtree {
+                            nodes: state.nodes.iter().map(|(id, node)| (*id, node.clone())).collect(),
+                        },
+                    );
+                }
                 let nodes = {
                     state
                         .nodes
@@ -3716,6 +3744,81 @@ impl Context {
         writer: impl FnOnce(&mut accesskit::Node) -> R,
     ) -> Option<R> {
         self.write(|ctx| ctx.accesskit_node_builder(id).map(writer))
+    }
+
+    /// Take what the given hosted viewport's last pass built for AccessKit.
+    ///
+    /// A hosted viewport (see [`Self::run_hosted_viewport`]) is painted by the application,
+    /// so its [`FullOutput`] carries a whole tree of its own, rooted where the host's tree
+    /// is also rooted. Handing that to the integration would throw away everything outside
+    /// the child; this hands you the nodes instead, to
+    /// [`graft`](Self::graft_accesskit_subtree) into the host's tree where the child was
+    /// actually painted.
+    ///
+    /// `None` if AccessKit is off, or the viewport has not run since the last time you asked.
+    #[must_use]
+    pub fn take_accesskit_subtree(&self, viewport_id: ViewportId) -> Option<AccessKitSubtree> {
+        self.write(|ctx| ctx.hosted_accesskit.remove(&viewport_id))
+    }
+
+    /// Put a subtree into the current viewport's tree, under `parent` and moved to where the
+    /// child was painted.
+    ///
+    /// `to_parent` maps the child's coordinates to this viewport's, and is applied to every
+    /// node's bounds — a screen reader, and a test driver, both work from those.
+    ///
+    /// Does nothing if AccessKit is off. `parent` gets a node of its own if it has none yet,
+    /// so the caller does not have to have shown a widget there.
+    pub fn graft_accesskit_subtree(
+        &self,
+        subtree: &AccessKitSubtree,
+        parent: Id,
+        to_parent: emath::TSTransform,
+    ) {
+        let child_root = crate::accesskit_root_id();
+        // Makes sure `parent` has a node to hang the subtree off.
+        if self.accesskit_node_builder(parent, |_| ()).is_none() {
+            return;
+        }
+
+        self.write(|ctx| {
+            let Some(state) = ctx.viewport().this_pass.accesskit_state.as_mut() else {
+                return;
+            };
+            for (id, node) in &subtree.nodes {
+                if *id == child_root {
+                    continue;
+                }
+                let mut node = node.clone();
+                if let Some(bounds) = node.bounds() {
+                    let rect = to_parent
+                        * Rect::from_min_max(
+                            crate::pos2(bounds.x0 as f32, bounds.y0 as f32),
+                            crate::pos2(bounds.x1 as f32, bounds.y1 as f32),
+                        );
+                    node.set_bounds(accesskit::Rect {
+                        x0: f64::from(rect.min.x),
+                        y0: f64::from(rect.min.y),
+                        x1: f64::from(rect.max.x),
+                        y1: f64::from(rect.max.y),
+                    });
+                }
+                state.nodes.insert(*id, node);
+            }
+
+            // Everything the child hung off its own root hangs off `parent` here instead.
+            let roots: Vec<_> = subtree
+                .nodes
+                .iter()
+                .find(|(id, _)| *id == child_root)
+                .map(|(_, node)| node.children().to_vec())
+                .unwrap_or_default();
+            if let Some(parent_node) = state.nodes.get_mut(&parent) {
+                for root in roots {
+                    parent_node.push_child(root);
+                }
+            }
+        });
     }
 
     pub(crate) fn register_accesskit_parent(&self, id: Id, parent_id: Id) {
