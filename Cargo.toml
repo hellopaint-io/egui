@@ -373,4 +373,4 @@ wildcard_imports = "allow" # `use crate::*` is useful to avoid merge conflicts w
 # `Touch::secondary_button` (the pen barrel button, reported on Windows) is a
 # fork-only field. Ignored when this repo is consumed as a dependency — the
 # consuming workspace has to patch winit the same way.
-winit = { git = "https://github.com/hellopaint-io/winit", branch = "malmal/pen-secondary-button" }
+winit = { git = "https://github.com/hellopaint-io/winit", branch = "malmal/main" }
