@@ -142,6 +142,16 @@ pub enum Event {
         /// not support pressure sensitivity.
         /// The value is in the range from 0.0 (no pressure) to 1.0 (maximum pressure).
         force: Option<f32>,
+
+        /// Was the pen's secondary (barrel) button held?
+        ///
+        /// Pen input arrives as a touch on some platforms (e.g. Windows Ink), where the
+        /// barrel button generates no mouse event of its own. Backends that know about it
+        /// also report the touch as [`Self::PointerButton`] with
+        /// [`PointerButton::Secondary`], so most code can ignore this field.
+        ///
+        /// Always `false` for finger touches, and on platforms that don't report it.
+        secondary_button: bool,
     },
 
     /// A raw mouse wheel event as sent by the backend.

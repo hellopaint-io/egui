@@ -368,3 +368,9 @@ map_unwrap_or = "allow" # so is this one
 self_named_module_files = "allow" # Disabled waiting on https://github.com/rust-lang/rust-clippy/issues/9602
 significant_drop_tightening = "allow" # Too many false positives
 wildcard_imports = "allow" # `use crate::*` is useful to avoid merge conflicts when adding/removing imports
+
+[patch.crates-io]
+# `Touch::secondary_button` (the pen barrel button, reported on Windows) is a
+# fork-only field. Ignored when this repo is consumed as a dependency — the
+# consuming workspace has to patch winit the same way.
+winit = { git = "https://github.com/hellopaint-io/winit", branch = "malmal/pen-secondary-button" }

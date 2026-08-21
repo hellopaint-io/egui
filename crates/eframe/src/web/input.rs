@@ -93,6 +93,9 @@ pub fn push_touches(runner: &mut AppRunner, phase: egui::TouchPhase, event: &web
                 phase,
                 pos: pos_from_touch(canvas_rect, &touch, runner.egui_ctx()),
                 force: Some(touch.force()),
+                // Touch events carry no button; pen barrel presses arrive on the
+                // pointer-event path instead.
+                secondary_button: false,
             });
         }
     }

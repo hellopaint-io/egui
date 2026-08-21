@@ -119,6 +119,12 @@ pub struct State {
     /// Only one touch will be interpreted as pointer at any time.
     pointer_touch_id: Option<u64>,
 
+    /// Which mouse button the touch in `pointer_touch_id` is being translated to.
+    ///
+    /// Latched at touch-down: a pen's barrel button may be released before the pen
+    /// is lifted, and the press and release have to name the same button.
+    pointer_touch_button: winit::event::MouseButton,
+
     #[cfg(feature = "accesskit")]
     pub accesskit: Option<accesskit_winit::Adapter>,
 
@@ -169,6 +175,7 @@ impl State {
 
             simulate_touch_screen: false,
             pointer_touch_id: None,
+            pointer_touch_button: winit::event::MouseButton::Left,
 
             #[cfg(feature = "accesskit")]
             accesskit: None,
@@ -823,6 +830,7 @@ impl State {
                         phase: egui::TouchPhase::Start,
                         pos,
                         force: None,
+                        secondary_button: button == egui::PointerButton::Secondary,
                     });
                 } else {
                     self.any_pointer_button_down = false;
@@ -835,6 +843,7 @@ impl State {
                         phase: egui::TouchPhase::End,
                         pos,
                         force: None,
+                        secondary_button: button == egui::PointerButton::Secondary,
                     });
                 }
             }
@@ -866,6 +875,7 @@ impl State {
                     phase: egui::TouchPhase::Move,
                     pos: pos_in_points,
                     force: None,
+                    secondary_button: false,
                 });
             }
         } else {
@@ -896,6 +906,7 @@ impl State {
                 }) => Some((force / max_possible_force) as f32),
                 None => None,
             },
+            secondary_button: touch.secondary_button,
         });
         // If we're not yet translating a touch or we're translating this very
         // touch …
@@ -905,11 +916,16 @@ impl State {
             match touch.phase {
                 winit::event::TouchPhase::Started => {
                     self.pointer_touch_id = Some(touch.id);
+                    self.pointer_touch_button = if touch.secondary_button {
+                        winit::event::MouseButton::Right
+                    } else {
+                        winit::event::MouseButton::Left
+                    };
                     // First move the pointer to the right location
                     self.on_cursor_moved(window, touch.location);
                     self.on_mouse_button_input(
                         winit::event::ElementState::Pressed,
-                        winit::event::MouseButton::Left,
+                        self.pointer_touch_button,
                     );
                 }
                 winit::event::TouchPhase::Moved => {
@@ -919,7 +935,7 @@ impl State {
                     self.pointer_touch_id = None;
                     self.on_mouse_button_input(
                         winit::event::ElementState::Released,
-                        winit::event::MouseButton::Left,
+                        self.pointer_touch_button,
                     );
                     // The pointer should vanish completely to not get any
                     // hover effects
