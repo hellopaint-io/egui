@@ -88,6 +88,8 @@ impl StyleProvider<ButtonStyle> for DefaultStyle {
                 ..Default::default()
             },
             text_style: ws.text,
+            min_size: Vec2::ZERO,
+            force_text_style: false,
         }
     }
 }

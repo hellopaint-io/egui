@@ -1,7 +1,8 @@
 use epaint::Margin;
 
 use crate::{
-    Atom, AtomExt as _, AtomKind, AtomLayout, AtomLayoutResponse, Atoms, Color32, CornerRadius,
+    Align2, Atom, AtomExt as _, AtomKind, AtomLayout, AtomLayoutResponse, Atoms, Color32,
+    CornerRadius,
     Frame, Image, IntoAtoms, NumExt as _, Response, Sense, Stroke, TextStyle, TextWrapMode, Ui,
     Vec2, Widget, WidgetInfo, WidgetText, WidgetType,
     widget_style::{ButtonStyle, Classes, HasClasses, SELECTED_CLASS, WidgetState},
@@ -39,6 +40,8 @@ pub struct Button<'a> {
     image_tint_follows_text_color: bool,
     limit_image_size: bool,
     classes: Classes,
+    accessibility_label: Option<String>,
+    accessibility_label_tooltip: bool,
 }
 
 impl<'a> Button<'a> {
@@ -58,6 +61,8 @@ impl<'a> Button<'a> {
             image_tint_follows_text_color: false,
             limit_image_size: false,
             classes: Classes::default(),
+            accessibility_label: None,
+            accessibility_label_tooltip: false,
         }
     }
 
@@ -272,6 +277,26 @@ impl<'a> Button<'a> {
         self
     }
 
+    /// The name assistive technology reads for this button.
+    ///
+    /// Buttons are normally named by their own text; an icon-only button has
+    /// none, so it has to say what it does here.
+    #[inline]
+    pub fn accessibility_label(mut self, label: impl Into<String>) -> Self {
+        self.accessibility_label = Some(label.into());
+        self
+    }
+
+    /// Also show [`Self::accessibility_label`] as a hover tooltip.
+    ///
+    /// Sighted users need the same hint an icon-only button gives a screen
+    /// reader, and keeping them one string keeps the two from drifting apart.
+    #[inline]
+    pub fn accessibility_label_tooltip(mut self, tooltip: bool) -> Self {
+        self.accessibility_label_tooltip = tooltip;
+        self
+    }
+
     /// Set the gap between atoms.
     #[inline]
     pub fn gap(mut self, gap: f32) -> Self {
@@ -284,6 +309,24 @@ impl<'a> Button<'a> {
     /// This includes any images you have on the button.
     pub fn atoms(&self) -> &Atoms<'a> {
         &self.layout.atoms
+    }
+
+    /// The button's [`Atoms`], for pushing extra content on either side.
+    ///
+    /// Unlike [`Self::left_text`] / [`Self::right_text`] this doesn't insert an
+    /// [`Atom::grow`], so the added atom sits next to the existing content
+    /// instead of being pushed to the far edge.
+    pub fn atoms_mut(&mut self) -> &mut Atoms<'a> {
+        &mut self.layout.atoms
+    }
+
+    /// How to align the button's content inside its frame.
+    ///
+    /// Defaults to the alignment of the surrounding layout.
+    #[inline]
+    pub fn align2(mut self, align2: Align2) -> Self {
+        self.layout = self.layout.align2(align2);
+        self
     }
 
     /// Show the button and return a [`AtomLayoutResponse`] for painting custom contents.
@@ -301,12 +344,9 @@ impl<'a> Button<'a> {
             image_tint_follows_text_color,
             limit_image_size,
             mut classes,
+            accessibility_label,
+            accessibility_label_tooltip,
         } = self;
-
-        // Min size height always equal or greater than interact size if not small
-        if !small {
-            min_size.y = min_size.y.at_least(ui.spacing().interact_size.y);
-        }
 
         if limit_image_size {
             layout.map_atoms(|atom| {
@@ -318,7 +358,9 @@ impl<'a> Button<'a> {
             });
         }
 
-        let text = layout.text().map(String::from);
+        let text = accessibility_label
+            .clone()
+            .or_else(|| layout.text().map(String::from));
 
         let has_frame_margin = frame.unwrap_or_else(|| ui.visuals().button_frame);
 
@@ -328,7 +370,23 @@ impl<'a> Button<'a> {
 
         classes.add_class_if(SELECTED_CLASS, selected.unwrap_or(false));
 
-        let ButtonStyle { frame, text_style } = ui.widget_style(id, &classes);
+        let ButtonStyle {
+            frame,
+            text_style,
+            min_size: style_min_size,
+            force_text_style,
+        } = ui.widget_style(id, &classes);
+
+        // Min size height always equal or greater than interact size if not
+        // small — unless the theme named a height itself, in which case that is
+        // the one the design system wants.
+        if !small && style_min_size.y <= 0.0 {
+            min_size.y = min_size.y.at_least(ui.spacing().interact_size.y);
+        }
+
+        // The theme's minimum is a floor, not a cap: an explicit
+        // `Button::min_size` still wins when it asks for more.
+        min_size = min_size.max(style_min_size);
 
         let mut button_padding = if has_frame_margin {
             frame.inner_margin
@@ -360,6 +418,24 @@ impl<'a> Button<'a> {
             .fallback_font(text_style.font_id.clone())
             .fallback_text_color(text_style.color);
 
+        // The fallbacks above only reach the button's own atoms, and a plain
+        // `WidgetText::Text` bakes in `Visuals::override_text_color` before it
+        // ever consults one. A theme that owns the whole button asks for its
+        // text style to be pushed onto the `Ui` instead, so it also reaches
+        // nested `AtomLayout`s and can't be beaten by an app-wide override.
+        // Anything that names its own size, family or color still wins.
+        let pushed_text_style = force_text_style.then(|| {
+            let color = ui
+                .visuals_mut()
+                .override_text_color
+                .replace(text_style.color);
+            let font_id = ui
+                .style_mut()
+                .override_font_id
+                .replace(text_style.font_id.clone());
+            (color, font_id)
+        });
+
         // Retrocompatibility with button settings
         layout = if has_frame_margin && (state != WidgetState::Inactive || frame_when_inactive) {
             layout.frame(frame)
@@ -382,6 +458,11 @@ impl<'a> Button<'a> {
             AtomLayoutResponse::empty(prepared.response)
         };
 
+        if let Some((color, font_id)) = pushed_text_style {
+            ui.visuals_mut().override_text_color = color;
+            ui.style_mut().override_font_id = font_id;
+        }
+
         if let Some(cursor) = ui.visuals().interact_cursor
             && response.response.hovered()
         {
@@ -401,6 +482,12 @@ impl<'a> Button<'a> {
             (None, Some(text)) => WidgetInfo::labeled(WidgetType::Button, ui.is_enabled(), text),
             (None, None) => WidgetInfo::new(WidgetType::Button),
         });
+
+        if accessibility_label_tooltip
+            && let Some(label) = accessibility_label
+        {
+            crate::Tooltip::for_enabled(&response.response).show(|ui| ui.label(label));
+        }
 
         response
     }

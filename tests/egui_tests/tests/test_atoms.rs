@@ -135,6 +135,8 @@ fn test_atom_layout_nesting_and_direction() {
             .get_widget_style::<ButtonStyle>(&StyleArgs {
                 classes: &egui::widget_style::Classes::default(),
                 state: egui::widget_style::WidgetState::Inactive,
+                hovered: false,
+                focused: false,
                 ctx: ui,
                 stack: ui.stack(),
                 style,

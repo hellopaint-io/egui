@@ -45,7 +45,14 @@ pub fn find_menu_root(ui: &Ui) -> &UiStack {
 /// Returns `false` if this is a menu bar.
 /// Should be used to determine if we should show a menu button or submenu button.
 pub fn is_in_menu(ui: &Ui) -> bool {
-    for stack in ui.stack().iter() {
+    is_in_menu_stack(ui.stack())
+}
+
+/// Same as [`is_in_menu`], for code that only has the [`UiStack`] — e.g. a
+/// [`StyleProvider`](crate::theme::StyleProvider), which is handed the stack
+/// rather than the [`Ui`].
+pub fn is_in_menu_stack(stack: &crate::UiStack) -> bool {
+    for stack in stack.iter() {
         if let Some(config) = stack
             .info
             .tags

@@ -28,18 +28,24 @@ impl Ui {
         classes: &Classes,
     ) -> S {
         // Fetch the state of the widget, as it was in the previous pass
-        let state = if let Some(response) = self.read_response(id) {
-            response.widget_state()
+        let (state, hovered, focused) = if let Some(response) = self.read_response(id) {
+            (
+                response.widget_state(),
+                response.hovered() || response.is_pointer_button_down_on(),
+                response.has_focus(),
+            )
         } else {
             // We don't know the state of the widget yet, so we would style it wrong.
             // It will be styled correctly on next frame.
             self.ctx().request_repaint();
-            WidgetState::default()
+            (WidgetState::default(), false, false)
         };
 
         self.get_widget_style::<S>(&StyleArgs {
             classes,
             state,
+            hovered,
+            focused,
             style: self.style(),
             stack: self.stack(),
             ctx: self,

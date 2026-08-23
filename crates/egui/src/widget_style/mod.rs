@@ -8,6 +8,7 @@ pub use self::classes::{ClassName, Classes, HasClasses, ROOT_CLASS, SELECTED_CLA
 
 use core::fmt::Debug;
 
+use emath::Vec2;
 use epaint::{Color32, FontId, Stroke, text::TextWrapMode};
 
 use crate::{
@@ -49,6 +50,23 @@ impl WidgetStyle for BaseStyle {}
 pub struct ButtonStyle {
     pub frame: Frame,
     pub text_style: TextVisuals,
+
+    /// Smallest size the button may take, including its frame margins.
+    ///
+    /// Design systems where the control height is part of the theme (a "small"
+    /// / "medium" / "large" button) need to set this here, since the call site
+    /// doesn't know what the theme picked.
+    pub min_size: Vec2,
+
+    /// Is [`Self::text_style`] a fallback, or the answer?
+    ///
+    /// By default it only fills in what the button's own atoms leave open, and
+    /// an app-wide [`Visuals::override_text_color`](crate::Visuals::override_text_color)
+    /// or a nested [`AtomLayout`](crate::AtomLayout) never sees it. A theme that
+    /// owns the look of the whole button — one where "primary" means white text
+    /// on blue, whatever the surrounding style says — sets this, and the style
+    /// is pushed onto the `Ui` for the duration of the button instead.
+    pub force_text_style: bool,
 }
 
 impl WidgetStyle for ButtonStyle {}
@@ -143,6 +161,19 @@ impl Response {
 pub struct StyleArgs<'a> {
     pub classes: &'a Classes,
     pub state: WidgetState,
+
+    /// Was the pointer over the widget (or held down on it) in the previous pass?
+    ///
+    /// [`WidgetState`] ranks its four states, so a hovered widget that also has
+    /// focus reports [`WidgetState::Active`] and the hover is lost. A theme that
+    /// tints on hover independently of focus has to look here.
+    pub hovered: bool,
+
+    /// Did the widget have keyboard focus in the previous pass?
+    ///
+    /// [`WidgetState::Active`] also covers press and click, so a theme that
+    /// wants a focus ring — and only a focus ring — has to look here.
+    pub focused: bool,
     pub stack: &'a UiStack,
     pub style: &'a Style,
     pub ctx: &'a Context,
