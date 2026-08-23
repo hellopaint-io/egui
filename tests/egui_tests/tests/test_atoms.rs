@@ -136,6 +136,7 @@ fn test_atom_layout_nesting_and_direction() {
                 classes: &egui::widget_style::Classes::default(),
                 state: egui::widget_style::WidgetState::Inactive,
                 hovered: false,
+                pressed: false,
                 focused: false,
                 ctx: ui,
                 stack: ui.stack(),

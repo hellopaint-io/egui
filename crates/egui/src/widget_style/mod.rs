@@ -169,6 +169,12 @@ pub struct StyleArgs<'a> {
     /// tints on hover independently of focus has to look here.
     pub hovered: bool,
 
+    /// Was a pointer button held down on the widget in the previous pass?
+    ///
+    /// [`WidgetState::Active`] also covers focus and click, so a theme that
+    /// wants a distinct pressed look has to look here.
+    pub pressed: bool,
+
     /// Did the widget have keyboard focus in the previous pass?
     ///
     /// [`WidgetState::Active`] also covers press and click, so a theme that
