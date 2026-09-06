@@ -149,6 +149,7 @@ impl TouchState {
                     pos,
                     force,
                     secondary_button: _,
+                    tool: _,
                 } if device_id == self.device_id => match phase {
                     TouchPhase::Start => {
                         self.active_touches.insert(id, ActiveTouch { pos, force });

@@ -831,6 +831,7 @@ impl State {
                         pos,
                         force: None,
                         secondary_button: button == egui::PointerButton::Secondary,
+                        tool: egui::TouchTool::Unknown,
                     });
                 } else {
                     self.any_pointer_button_down = false;
@@ -844,6 +845,7 @@ impl State {
                         pos,
                         force: None,
                         secondary_button: button == egui::PointerButton::Secondary,
+                        tool: egui::TouchTool::Unknown,
                     });
                 }
             }
@@ -876,6 +878,7 @@ impl State {
                     pos: pos_in_points,
                     force: None,
                     secondary_button: false,
+                    tool: egui::TouchTool::Unknown,
                 });
             }
         } else {
@@ -907,6 +910,11 @@ impl State {
                 None => None,
             },
             secondary_button: touch.secondary_button,
+            tool: match touch.tool {
+                winit::event::TouchTool::Finger => egui::TouchTool::Finger,
+                winit::event::TouchTool::Pen => egui::TouchTool::Pen,
+                winit::event::TouchTool::Unknown => egui::TouchTool::Unknown,
+            },
         });
         // If we're not yet translating a touch or we're translating this very
         // touch …
