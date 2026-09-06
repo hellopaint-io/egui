@@ -31,6 +31,26 @@ pub enum TouchPhase {
     Cancel,
 }
 
+/// What is touching the surface: a fingertip, a pen, or something the
+/// backend cannot name.
+///
+/// Pen input arrives as a touch on most platforms, so without this a stylus
+/// contact is indistinguishable from a finger. Treat [`TouchTool::Unknown`]
+/// as "could be either" rather than as a finger.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+pub enum TouchTool {
+    /// The backend does not report which tool this touch came from.
+    #[default]
+    Unknown,
+
+    /// A fingertip.
+    Finger,
+
+    /// A pen or stylus, either end of it.
+    Pen,
+}
+
 impl From<u64> for TouchId {
     fn from(id: u64) -> Self {
         Self(id)

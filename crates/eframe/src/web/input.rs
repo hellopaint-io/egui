@@ -96,6 +96,9 @@ pub fn push_touches(runner: &mut AppRunner, phase: egui::TouchPhase, event: &web
                 // Touch events carry no button; pen barrel presses arrive on the
                 // pointer-event path instead.
                 secondary_button: false,
+                // The DOM `Touch` interface names no tool; `touchType` is
+                // WebKit-only and web-sys does not bind it.
+                tool: egui::TouchTool::Unknown,
             });
         }
     }

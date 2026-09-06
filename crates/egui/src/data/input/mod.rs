@@ -28,6 +28,6 @@ pub use self::{
     pointer_button::{NUM_POINTER_BUTTONS, PointerButton},
     raw_input::RawInput,
     safe_area_insets::SafeAreaInsets,
-    touch::{TouchDeviceId, TouchId, TouchPhase},
+    touch::{TouchDeviceId, TouchId, TouchPhase, TouchTool},
     viewport_info::{ViewportEvent, ViewportInfo},
 };
