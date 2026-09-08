@@ -1771,7 +1771,7 @@ impl Widgets {
                 bg_fill: Color32::from_gray(27),
                 bg_stroke: Stroke::new(1.0, Color32::from_gray(60)), // separators, indentation lines
                 fg_stroke: Stroke::new(1.0, Color32::from_gray(140)), // normal text color
-                corner_radius: CornerRadius::same(2),
+                corner_radius: CornerRadius::same(4),
                 expansion: 0.0,
             },
             inactive: WidgetVisuals {
@@ -1779,7 +1779,7 @@ impl Widgets {
                 bg_fill: Color32::from_gray(60),      // checkbox background
                 bg_stroke: Default::default(),
                 fg_stroke: Stroke::new(1.0, Color32::from_gray(180)), // button text
-                corner_radius: CornerRadius::same(2),
+                corner_radius: CornerRadius::same(4),
                 expansion: 0.0,
             },
             hovered: WidgetVisuals {
@@ -1787,7 +1787,7 @@ impl Widgets {
                 bg_fill: Color32::from_gray(70),
                 bg_stroke: Stroke::new(1.0, Color32::from_gray(150)), // e.g. hover over window edge or button
                 fg_stroke: Stroke::new(1.5, Color32::from_gray(240)),
-                corner_radius: CornerRadius::same(3),
+                corner_radius: CornerRadius::same(4),
                 expansion: 0.0,
             },
             active: WidgetVisuals {
@@ -1795,7 +1795,7 @@ impl Widgets {
                 bg_fill: Color32::from_gray(55),
                 bg_stroke: Stroke::new(1.0, Color32::WHITE),
                 fg_stroke: Stroke::new(2.0, Color32::WHITE),
-                corner_radius: CornerRadius::same(2),
+                corner_radius: CornerRadius::same(4),
                 expansion: 0.0,
             },
             open: WidgetVisuals {
@@ -1803,7 +1803,7 @@ impl Widgets {
                 bg_fill: Color32::from_gray(27),
                 bg_stroke: Stroke::new(1.0, Color32::from_gray(60)),
                 fg_stroke: Stroke::new(1.0, Color32::from_gray(210)),
-                corner_radius: CornerRadius::same(2),
+                corner_radius: CornerRadius::same(4),
                 expansion: 0.0,
             },
         }
@@ -1816,7 +1816,7 @@ impl Widgets {
                 bg_fill: Color32::from_gray(248),
                 bg_stroke: Stroke::new(1.0, Color32::from_gray(190)), // separators, indentation lines
                 fg_stroke: Stroke::new(1.0, Color32::from_gray(80)),  // normal text color
-                corner_radius: CornerRadius::same(2),
+                corner_radius: CornerRadius::same(4),
                 expansion: 0.0,
             },
             inactive: WidgetVisuals {
@@ -1824,7 +1824,7 @@ impl Widgets {
                 bg_fill: Color32::from_gray(230),      // checkbox background
                 bg_stroke: Default::default(),
                 fg_stroke: Stroke::new(1.0, Color32::from_gray(60)), // button text
-                corner_radius: CornerRadius::same(2),
+                corner_radius: CornerRadius::same(4),
                 expansion: 0.0,
             },
             hovered: WidgetVisuals {
@@ -1832,7 +1832,7 @@ impl Widgets {
                 bg_fill: Color32::from_gray(220),
                 bg_stroke: Stroke::new(1.0, Color32::from_gray(105)), // e.g. hover over window edge or button
                 fg_stroke: Stroke::new(1.5, Color32::BLACK),
-                corner_radius: CornerRadius::same(3),
+                corner_radius: CornerRadius::same(4),
                 expansion: 0.0,
             },
             active: WidgetVisuals {
@@ -1840,7 +1840,7 @@ impl Widgets {
                 bg_fill: Color32::from_gray(165),
                 bg_stroke: Stroke::new(1.0, Color32::BLACK),
                 fg_stroke: Stroke::new(2.0, Color32::BLACK),
-                corner_radius: CornerRadius::same(2),
+                corner_radius: CornerRadius::same(4),
                 expansion: 0.0,
             },
             open: WidgetVisuals {
@@ -1848,7 +1848,7 @@ impl Widgets {
                 bg_fill: Color32::from_gray(220),
                 bg_stroke: Stroke::new(1.0, Color32::from_gray(160)),
                 fg_stroke: Stroke::new(1.0, Color32::BLACK),
-                corner_radius: CornerRadius::same(2),
+                corner_radius: CornerRadius::same(4),
                 expansion: 0.0,
             },
         }
@@ -1987,7 +1987,7 @@ impl Style {
 
         ui.collapsing("🔠 Text styles", |ui| text_styles_ui(ui, text_styles));
         ui.collapsing("📏 Spacing", |ui| spacing.ui(ui));
-        ui.collapsing("☝ Interaction", |ui| interaction.ui(ui));
+        ui.collapsing("☝️ Interaction", |ui| interaction.ui(ui));
         ui.collapsing("🎨 Visuals", |ui| visuals.ui(ui));
         ui.collapsing("🔄 Scroll animation", |ui| scroll_animation.ui(ui));
 

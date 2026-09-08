@@ -133,7 +133,7 @@ fn test_atom_layout_nesting_and_direction() {
 
         let button_frame = ui
             .get_widget_style::<ButtonStyle>(&StyleArgs {
-                classes: &egui::widget_style::Classes::default(),
+                classes: &egui::class::Classes::default(),
                 state: egui::widget_style::WidgetState::Inactive,
                 hovered: false,
                 pressed: false,
@@ -142,6 +142,7 @@ fn test_atom_layout_nesting_and_direction() {
                 stack: ui.stack(),
                 style,
             })
+            .atom_layout
             .frame;
 
         let row = |direction: Direction| {
