@@ -1,7 +1,7 @@
 use crate::{
-    Align2, Atom, AtomExt as _, AtomKind, AtomLayout, AtomLayoutResponse, Atoms, Color32,
-    CornerRadius, Image, IntoAtoms, NumExt as _, Response, Sense, Stroke, TextStyle, TextWrapMode,
-    Ui, Vec2, Widget, WidgetInfo, WidgetText, WidgetType,
+    Align2, Atom, AtomExt as _, AtomKind, Atoms, Color32, CornerRadius, Image, IntoAtoms,
+    NumExt as _, Response, Role, Sense, Stroke, TextStyle, TextWrapMode, Ui, Vec2, Widget,
+    WidgetAtom, WidgetAtomResponse, WidgetInfo, WidgetText,
     class::{ClassName, Classes, HasClasses},
     widget_style::ButtonStyle,
 };
@@ -26,7 +26,7 @@ use crate::{
 /// ```
 #[must_use = "You should put this widget in a ui with `ui.add(widget);`"]
 pub struct Button<'a> {
-    layout: AtomLayout<'a>,
+    layout: WidgetAtom<'a>,
     fill: Option<Color32>,
     stroke: Option<Stroke>,
     min_size: Vec2,
@@ -61,7 +61,7 @@ impl<'a> Button<'a> {
 
     pub fn new(atoms: impl IntoAtoms<'a>) -> Self {
         Self {
-            layout: AtomLayout::new(atoms.into_atoms())
+            layout: WidgetAtom::new(atoms.into_atoms())
                 .sense(Sense::click())
                 .fallback_font(TextStyle::Button),
             fill: None,
@@ -360,8 +360,8 @@ impl<'a> Button<'a> {
         self
     }
 
-    /// Show the button and return a [`AtomLayoutResponse`] for painting custom contents.
-    pub fn atom_ui(self, ui: &mut Ui) -> AtomLayoutResponse {
+    /// Show the button and return a [`WidgetAtomResponse`] for painting custom contents.
+    pub fn atom_ui(self, ui: &mut Ui) -> WidgetAtomResponse {
         let Button {
             mut layout,
             fill,
@@ -432,11 +432,11 @@ impl<'a> Button<'a> {
             .min_size(min_size)
             .allocate(ui);
 
-        // Get AtomLayoutResponse, empty if not visible
+        // Get WidgetAtomResponse, empty if not visible
         let response = if ui.is_rect_visible(prepared.response.rect) {
             prepared.paint(ui)
         } else {
-            AtomLayoutResponse::empty(prepared.response)
+            WidgetAtomResponse::empty(prepared.response)
         };
 
         if let Some((color, font_id)) = pushed_text_style {
@@ -452,21 +452,19 @@ impl<'a> Button<'a> {
 
         response.response.widget_info(|| match (selected, &text) {
             (Some(selected), Some(text)) => {
-                WidgetInfo::selected(WidgetType::Button, ui.is_enabled(), selected, text)
+                WidgetInfo::selected(Role::Button, ui.is_enabled(), selected, text)
             }
             (Some(selected), None) => {
-                let mut info = WidgetInfo::new(WidgetType::Button);
+                let mut info = WidgetInfo::new(Role::Button);
                 info.enabled = ui.is_enabled();
                 info.selected = Some(selected);
                 info
             }
-            (None, Some(text)) => WidgetInfo::labeled(WidgetType::Button, ui.is_enabled(), text),
-            (None, None) => WidgetInfo::new(WidgetType::Button),
+            (None, Some(text)) => WidgetInfo::labeled(Role::Button, ui.is_enabled(), text),
+            (None, None) => WidgetInfo::new(Role::Button),
         });
 
-        if accessibility_label_tooltip
-            && let Some(label) = accessibility_label
-        {
+        if accessibility_label_tooltip && let Some(label) = accessibility_label {
             crate::Tooltip::for_enabled(&response.response).show(|ui| ui.label(label));
         }
 

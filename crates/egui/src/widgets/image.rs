@@ -8,8 +8,8 @@ use epaint::{
 };
 
 use crate::{
-    Color32, Context, CornerRadius, Id, Mesh, Painter, Rect, Response, Sense, Shape, Spinner,
-    TextStyle, TextureOptions, Ui, Vec2, Widget, WidgetInfo, WidgetType,
+    Color32, Context, CornerRadius, Id, Mesh, Painter, Rect, Response, Role, Sense, Shape, Spinner,
+    TextStyle, TextureOptions, Ui, Vec2, Widget, WidgetInfo,
     load::{Bytes, SizeHint, SizedTexture, TextureLoadResult, TexturePoll},
     pos2,
 };
@@ -404,7 +404,7 @@ impl Widget for Image<'_> {
 
         let (rect, response) = ui.allocate_exact_size(ui_size, self.sense);
         response.widget_info(|| {
-            let mut info = WidgetInfo::new(WidgetType::Image);
+            let mut info = WidgetInfo::new(Role::Image);
             info.label = self.alt_text.clone();
             info
         });
@@ -910,7 +910,7 @@ pub fn decode_animated_image_uri(uri: &str) -> Result<(&str, usize), String> {
 fn animated_image_frame_index(ctx: &Context, uri: &str) -> usize {
     let now = ctx.input(|input| Duration::from_secs_f64(input.time));
 
-    let durations: Option<FrameDurations> = ctx.data(|data| data.get_temp(Id::new(uri)));
+    let durations: Option<FrameDurations> = ctx.data(|data| data.get_temp(Id::unique(uri)));
 
     if let Some(durations) = durations {
         let frames: Duration = durations.all().sum();

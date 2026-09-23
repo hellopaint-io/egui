@@ -72,6 +72,7 @@ impl StyleProvider<ButtonStyle> for MyTheme {
                 text_style: TextVisuals::new(style, TextStyle::Button, Color32::WHITE),
                 ..Default::default()
             },
+            force_text_style: false,
         }
     }
 }

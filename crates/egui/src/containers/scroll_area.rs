@@ -8,9 +8,9 @@ use emath::GuiRounding as _;
 use epaint::{Color32, Direction, Margin, Shape};
 
 use crate::{
-    AsIdSalt, Context, CursorIcon, Id, IdSalt, NumExt as _, Pos2, Rangef, Rect, Response, Sense,
-    Ui, UiBuilder, UiKind, UiStackInfo, Vec2, Vec2b, WidgetInfo, emath, epaint, lerp, pass_state,
-    pos2, remap, remap_clamp,
+    AsIdSalt, Context, CursorIcon, Id, IdSalt, NumExt as _, Pos2, Rangef, Rect, Response, Role,
+    Sense, Ui, UiBuilder, UiKind, UiStackInfo, Vec2, Vec2b, WidgetInfo, emath, epaint, lerp,
+    pass_state, pos2, remap, remap_clamp,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -1443,7 +1443,13 @@ impl Prepared {
         // Reserve the scroll area before painting fades, because fade painting uses ui.min_rect().
         ui.advance_cursor_after_rect(outer_rect);
 
-        paint_fade_areas_impl(ui, inner_rect, content_size, state.offset, direction_enabled);
+        paint_fade_areas_impl(
+            ui,
+            inner_rect,
+            content_size,
+            state.offset,
+            direction_enabled,
+        );
 
         // Paint the bars:
         let scroll_bar_rect = scroll_bar_rect.unwrap_or(inner_rect);
@@ -1508,7 +1514,7 @@ impl Prepared {
             // Also: it make sense to detect any hover where the scroll bar _will_ be.
             let response = ui.interact(max_bar_rect, interact_id, sense);
 
-            response.widget_info(|| WidgetInfo::new(crate::WidgetType::ScrollBar));
+            response.widget_info(|| WidgetInfo::new(Role::ScrollBar));
 
             // top/bottom of a horizontal scroll (d==0).
             // left/rigth of a vertical scroll (d==1).

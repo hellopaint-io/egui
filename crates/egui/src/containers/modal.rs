@@ -1,8 +1,6 @@
 use emath::{Align2, Vec2};
 
-use crate::{
-    Area, Color32, Context, Frame, Id, InnerResponse, Order, Response, Sense, Ui, UiKind,
-};
+use crate::{Area, Color32, Context, Frame, Id, InnerResponse, Order, Response, Sense, Ui, UiKind};
 
 /// Paint a full-screen backdrop on the given [`Ui`] and return whether
 /// a click landed outside `content_rect` (i.e. on the backdrop).
@@ -11,7 +9,11 @@ use crate::{
 pub(crate) fn paint_backdrop(ui: &mut Ui, color: Color32) -> bool {
     let bg_rect = ui.ctx().viewport_rect();
 
-    let response = ui.interact(bg_rect, ui.unique_id().with("backdrop"), Sense::click_and_drag());
+    let response = ui.interact(
+        bg_rect,
+        ui.unique_id().with("backdrop"),
+        Sense::click_and_drag(),
+    );
     ui.painter().rect_filled(response.rect, 0.0, color);
 
     response.clicked() && !ui.response().contains_pointer()
