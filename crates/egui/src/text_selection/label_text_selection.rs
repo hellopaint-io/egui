@@ -17,6 +17,9 @@ use super::{
 /// Turn on to help debug this
 const DEBUG: bool = false; // Don't merge `true`!
 
+/// How far past the side of a label a dragged selection handle still selects in it.
+const HANDLE_SLACK: f32 = 24.0;
+
 /// One end of a text selection, inside any widget.
 #[derive(Clone, Copy)]
 struct WidgetTextCursor {
@@ -562,11 +565,15 @@ impl ViewportLabelSelectionState {
 
             let contains_pointer = if self.handle_drag_target.is_some() {
                 // The finger is on the handle, below or above the text, so hit-test where the handle points.
+                // Sideways with some slack: a handle dragged a little past the end of a line should
+                // still select to its end.
                 let global_from_layer = ui
                     .ctx()
                     .layer_transform_to_global(response.layer_id)
                     .unwrap_or_default();
-                (global_from_layer * response.interact_rect).contains(pointer_pos)
+                let widget_rect = global_from_layer * response.interact_rect;
+                widget_rect.y_range().contains(pointer_pos.y)
+                    && widget_rect.x_range().expand(HANDLE_SLACK).contains(pointer_pos.x)
             } else {
                 response.contains_pointer()
             };
