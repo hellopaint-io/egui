@@ -105,7 +105,7 @@ impl TextCursorState {
     }
 }
 
-fn select_word_at(text: &str, ccursor: CCursor) -> CCursorRange {
+pub(crate) fn select_word_at(text: &str, ccursor: CCursor) -> CCursorRange {
     if text.is_empty() {
         return CCursorRange::one(ccursor);
     }

@@ -3,13 +3,14 @@ use std::sync::Arc;
 use emath::TSTransform;
 
 use crate::{
-    Context, CursorIcon, Event, Galley, Id, LayerId, Plugin, Pos2, Rect, Response, Ui,
-    ViewportIdMap, layers::ShapeIdx, text::CCursor, text_selection::CCursorRange,
+    Area, Context, CursorIcon, Event, Galley, Id, LayerId, Order, Plugin, Pos2, Rect, Response,
+    Sense, Ui, Vec2, ViewportIdMap, layers::ShapeIdx, pos2, text::CCursor,
+    text_selection::CCursorRange, vec2,
 };
 
 use super::{
     TextCursorState,
-    text_cursor_state::cursor_rect,
+    text_cursor_state::{cursor_rect, select_word_at},
     visuals::{RowVertexIndices, paint_text_selection},
 };
 
@@ -24,6 +25,9 @@ struct WidgetTextCursor {
 
     /// Last known screen position
     pos: Pos2,
+
+    /// Last known screen rectangle of the cursor: zero width, one row tall.
+    rect: Rect,
 }
 
 impl WidgetTextCursor {
@@ -34,17 +38,19 @@ impl WidgetTextCursor {
         galley: &Galley,
     ) -> Self {
         let ccursor = cursor.into();
-        let pos = global_from_galley * pos_in_galley(galley, ccursor);
+        let rect = global_from_galley * galley.pos_from_cursor(ccursor);
         Self {
             widget_id,
             ccursor,
-            pos,
+            pos: rect.center(),
+            rect,
         }
     }
-}
 
-fn pos_in_galley(galley: &Galley, ccursor: CCursor) -> Pos2 {
-    galley.pos_from_cursor(ccursor).center()
+    fn update_pos(&mut self, global_from_galley: TSTransform, galley: &Galley) {
+        self.rect = global_from_galley * galley.pos_from_cursor(self.ccursor);
+        self.pos = self.rect.center();
+    }
 }
 
 impl core::fmt::Debug for WidgetTextCursor {
@@ -53,6 +59,7 @@ impl core::fmt::Debug for WidgetTextCursor {
             widget_id,
             ccursor,
             pos: _,
+            rect: _,
         } = self;
         f.debug_struct("WidgetTextCursor")
             .field("widget_id", &widget_id.short_debug_format())
@@ -81,9 +88,44 @@ struct CurrentSelection {
 /// Handles text selection in labels (NOT in [`crate::TextEdit`])s.
 ///
 /// Each viewport has its own state, because viewports are rendered in separate passes.
+///
+/// On touch screens, where dragging scrolls instead of selecting, a long press
+/// selects the word under the finger and two handles drag the ends of the selection.
+/// Nothing on a touch screen sends [`Event::Copy`], so an integration that wants the
+/// selection copyable reads it with [`Self::selection`] and offers its own copy action.
 #[derive(Clone, Debug, Default)]
 pub struct LabelSelectionState {
     states: ViewportIdMap<ViewportLabelSelectionState>,
+}
+
+/// A non-empty label text selection, as of the end of the last pass.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LabelTextSelection {
+    /// The layer the selected labels are in.
+    pub layer_id: LayerId,
+
+    /// Screen rectangle around the selected part of the text, clipped to what is visible.
+    pub rect: Rect,
+
+    /// The selected text, joined across labels the same way a copy joins it.
+    pub text: String,
+}
+
+/// One end of the selection, as a touch handle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum HandleEnd {
+    Start,
+    End,
+}
+
+/// A selection handle being dragged.
+#[derive(Clone, Copy, Debug)]
+struct HandleDrag {
+    /// From the end of the selection to where the finger grabbed the handle.
+    ///
+    /// Kept so the cursor goes where the handle is, not under the finger, which
+    /// would hide the very text being selected.
+    grab_offset: Vec2,
 }
 
 /// Text selection state for all labels in one viewport.
@@ -115,6 +157,30 @@ struct ViewportLabelSelectionState {
     ///
     /// Kept so we can undo a bad selection visualization if we don't see both ends of the selection this frame.
     painted_selections: Vec<(ShapeIdx, Vec<RowVertexIndices>)>,
+
+    /// The non-empty selected text seen this pass, joined like [`Self::text_to_copy`].
+    selected_text: String,
+    last_selected_galley_rect: Option<Rect>,
+    selected_rect_this_frame: Rect,
+
+    /// What [`LabelSelectionState::selection`] returns, published at the end of each pass.
+    published: Option<LabelTextSelection>,
+
+    /// Select all of the label with the primary cursor in the next pass.
+    select_all_requested: bool,
+
+    /// Clear the selection at the end of this pass.
+    deselect_requested: bool,
+
+    /// Touch only: the current press landed outside every label and handle,
+    /// so letting go without moving is a tap that deselects.
+    touch_pressed_outside: bool,
+
+    /// Touch only: a selection handle is being dragged.
+    handle_drag: Option<HandleDrag>,
+
+    /// Touch only: where the dragged end of the selection should go this pass.
+    handle_drag_target: Option<Pos2>,
 }
 
 impl Default for ViewportLabelSelectionState {
@@ -130,6 +196,15 @@ impl Default for ViewportLabelSelectionState {
             text_to_copy: Default::default(),
             last_copied_galley_rect: Default::default(),
             painted_selections: Default::default(),
+            selected_text: Default::default(),
+            last_selected_galley_rect: Default::default(),
+            selected_rect_this_frame: Rect::NOTHING,
+            published: Default::default(),
+            select_all_requested: Default::default(),
+            deselect_requested: Default::default(),
+            touch_pressed_outside: Default::default(),
+            handle_drag: Default::default(),
+            handle_drag_target: Default::default(),
         }
     }
 }
@@ -167,6 +242,37 @@ impl LabelSelectionState {
     /// Clear all label text selections in all viewports.
     pub fn clear_selection(&mut self) {
         self.states.clear();
+    }
+
+    /// The non-empty label text selection in the current viewport of `ctx`, as of the end of the last pass.
+    ///
+    /// Don't call this from inside a label, it locks the plugin.
+    pub fn selection(ctx: &Context) -> Option<LabelTextSelection> {
+        let viewport_id = ctx.viewport_id();
+        let plugin = ctx.plugin::<Self>();
+        let plugin = plugin.lock();
+        plugin.states.get(&viewport_id)?.published.clone()
+    }
+
+    /// Select all the text of the label holding the moving end of the selection.
+    ///
+    /// Takes effect in the next pass, so this requests a repaint.
+    pub fn select_all(ctx: &Context) {
+        let viewport_id = ctx.viewport_id();
+        let plugin = ctx.plugin::<Self>();
+        let mut plugin = plugin.lock();
+        if let Some(state) = plugin.states.get_mut(&viewport_id)
+            && state.selection.is_some()
+        {
+            state.select_all_requested = true;
+            ctx.request_repaint();
+        }
+    }
+
+    /// Clear the label text selections in all viewports, and repaint.
+    pub fn deselect(ctx: &Context) {
+        ctx.plugin::<Self>().lock().clear_selection();
+        ctx.request_repaint();
     }
 
     /// Handle text selection state for a label or similar widget.
@@ -212,6 +318,22 @@ impl ViewportLabelSelectionState {
         self.text_to_copy.clear();
         self.last_copied_galley_rect = None;
         self.painted_selections.clear();
+        self.selected_text.clear();
+        self.last_selected_galley_rect = None;
+        self.selected_rect_this_frame = Rect::NOTHING;
+
+        self.handle_drag_target = None;
+        if let Some(handle_drag) = self.handle_drag {
+            let pointer = ui.input(|i| i.pointer.any_down().then(|| i.pointer.interact_pos()));
+            match pointer {
+                Some(Some(pointer)) => {
+                    self.handle_drag_target = Some(pointer - handle_drag.grab_offset);
+                    self.is_dragging = true;
+                }
+                Some(None) => {}
+                None => self.handle_drag = None,
+            }
+        }
     }
 
     fn on_end_pass(&mut self, ui: &Ui) {
@@ -259,12 +381,45 @@ impl ViewportLabelSelectionState {
             }
         }
 
+        let is_touch = ui.input(|i| i.has_touch_screen());
+        let handle_rects = if is_touch {
+            self.show_handles(ui)
+        } else {
+            Vec::new()
+        };
+
         let pressed_escape = ui.input(|i| i.key_pressed(crate::Key::Escape));
-        let clicked_something_else = ui.input(|i| i.pointer.any_pressed()) && !self.any_hovered;
-        let delected_everything = pressed_escape || clicked_something_else;
+        let clicked_something_else = if is_touch {
+            // Touching the screen is how it scrolls, so only a tap deselects.
+            let (pressed, press_origin, released, clicked) = ui.input(|i| {
+                (
+                    i.pointer.any_pressed(),
+                    i.pointer.press_origin(),
+                    i.pointer.any_released(),
+                    i.pointer.any_click(),
+                )
+            });
+            if pressed {
+                let on_handle =
+                    press_origin.is_some_and(|pos| handle_rects.iter().any(|r| r.contains(pos)));
+                self.touch_pressed_outside = !self.any_hovered && !on_handle;
+            }
+            let tapped_outside = self.touch_pressed_outside && clicked;
+            if released {
+                self.touch_pressed_outside = false;
+            }
+            tapped_outside
+        } else {
+            ui.input(|i| i.pointer.any_pressed()) && !self.any_hovered
+        };
+        let delected_everything =
+            pressed_escape || clicked_something_else || self.deselect_requested;
+        self.deselect_requested = false;
+        self.select_all_requested = false;
 
         if delected_everything {
             self.selection = None;
+            self.handle_drag = None;
         }
 
         if ui.input(|i| i.pointer.any_released()) {
@@ -275,6 +430,74 @@ impl ViewportLabelSelectionState {
         if !text_to_copy.is_empty() {
             ui.copy_text(text_to_copy);
         }
+
+        let selected_text = core::mem::take(&mut self.selected_text);
+        self.published = match self.selection {
+            Some(selection) if !selected_text.is_empty() => Some(LabelTextSelection {
+                layer_id: selection.layer_id,
+                rect: self.selected_rect_this_frame,
+                text: selected_text,
+            }),
+            _ => None,
+        };
+    }
+
+    /// Show the two touch handles at the ends of the selection, and start dragging one.
+    ///
+    /// Returns where they are on screen.
+    fn show_handles(&mut self, ui: &Ui) -> Vec<Rect> {
+        let Some(selection) = &mut self.selection else {
+            self.handle_drag = None;
+            return Vec::new();
+        };
+        let is_empty = selection.primary.widget_id == selection.secondary.widget_id
+            && selection.primary.ccursor == selection.secondary.ccursor;
+        if is_empty || !self.has_reached_primary || !self.has_reached_secondary {
+            return Vec::new();
+        }
+
+        let primary_first = reads_before(selection.primary.rect, selection.secondary.rect);
+        let color = ui.visuals().selection.bg_fill.to_opaque();
+
+        let (primary, secondary) = (selection.primary, selection.secondary);
+        let ends = if primary_first {
+            [(HandleEnd::Start, primary, true), (HandleEnd::End, secondary, false)]
+        } else {
+            [(HandleEnd::Start, secondary, false), (HandleEnd::End, primary, true)]
+        };
+
+        let mut rects = Vec::with_capacity(2);
+        for (end, cursor, is_primary) in ends {
+            let handle = Handle::new(end, cursor.rect);
+            rects.push(handle.hit_rect);
+
+            let response = Area::new(Id::unique("label_selection_handle").with(end))
+                .order(Order::Foreground)
+                .fixed_pos(handle.hit_rect.min)
+                .constrain(false)
+                .show(ui.ctx(), |ui| {
+                    let (_, response) =
+                        ui.allocate_exact_size(handle.hit_rect.size(), Sense::drag());
+                    handle.paint(ui.painter(), color);
+                    response
+                })
+                .inner;
+
+            if response.drag_started()
+                && let Some(pointer) = response.interact_pointer_pos()
+            {
+                // The drag code moves the primary end, so make this end the primary one.
+                if !is_primary {
+                    core::mem::swap(&mut selection.primary, &mut selection.secondary);
+                }
+                self.handle_drag = Some(HandleDrag {
+                    grab_offset: pointer - cursor.pos,
+                });
+                self.is_dragging = true;
+            }
+        }
+
+        rects
     }
 
     fn is_active(&self) -> bool {
@@ -287,48 +510,13 @@ impl ViewportLabelSelectionState {
 
     fn copy_text(&mut self, new_galley_rect: Rect, galley: &Galley, cursor_range: &CCursorRange) {
         let new_text = selected_text(galley, cursor_range);
-        if new_text.is_empty() {
-            return;
-        }
-
-        if self.text_to_copy.is_empty() {
-            self.text_to_copy = new_text;
-            self.last_copied_galley_rect = Some(new_galley_rect);
-            return;
-        }
-
-        let Some(last_copied_galley_rect) = self.last_copied_galley_rect else {
-            self.text_to_copy = new_text;
-            self.last_copied_galley_rect = Some(new_galley_rect);
-            return;
-        };
-
-        // We need to append or prepend the new text to the already copied text.
-        // We need to do so intelligently.
-
-        if last_copied_galley_rect.bottom() <= new_galley_rect.top() {
-            self.text_to_copy.push('\n');
-            let vertical_distance = new_galley_rect.top() - last_copied_galley_rect.bottom();
-            if estimate_row_height(galley) * 0.5 < vertical_distance {
-                self.text_to_copy.push('\n');
-            }
-        } else {
-            let existing_ends_with_space =
-                self.text_to_copy.chars().last().map(|c| c.is_whitespace());
-
-            let new_text_starts_with_space_or_punctuation = new_text
-                .chars()
-                .next()
-                .is_some_and(|c| c.is_whitespace() || c.is_ascii_punctuation());
-
-            if existing_ends_with_space == Some(false) && !new_text_starts_with_space_or_punctuation
-            {
-                self.text_to_copy.push(' ');
-            }
-        }
-
-        self.text_to_copy.push_str(&new_text);
-        self.last_copied_galley_rect = Some(new_galley_rect);
+        append_selected_text(
+            &mut self.text_to_copy,
+            &mut self.last_copied_galley_rect,
+            new_galley_rect,
+            galley,
+            new_text,
+        );
     }
 
     fn cursor_for(
@@ -355,12 +543,27 @@ impl ViewportLabelSelectionState {
         let may_select_widget =
             multi_widget_text_select || selection.primary.widget_id == response.id;
 
+        let pointer_pos = self
+            .handle_drag_target
+            .or_else(|| ui.ctx().pointer_interact_pos());
+
         if self.is_dragging
             && may_select_widget
-            && let Some(pointer_pos) = ui.ctx().pointer_interact_pos()
+            && let Some(pointer_pos) = pointer_pos
         {
             let galley_rect = global_from_galley * Rect::from_min_size(Pos2::ZERO, galley.size());
             let galley_rect = galley_rect.intersect(ui.clip_rect());
+
+            let contains_pointer = if self.handle_drag_target.is_some() {
+                // The finger is on the handle, below or above the text, so hit-test where the handle points.
+                let global_from_layer = ui
+                    .ctx()
+                    .layer_transform_to_global(response.layer_id)
+                    .unwrap_or_default();
+                (global_from_layer * response.interact_rect).contains(pointer_pos)
+            } else {
+                response.contains_pointer()
+            };
 
             let is_in_same_column = galley_rect
                 .x_range()
@@ -371,7 +574,7 @@ impl ViewportLabelSelectionState {
             let has_reached_secondary =
                 self.has_reached_secondary || response.id == selection.secondary.widget_id;
 
-            let new_primary = if response.contains_pointer() {
+            let new_primary = if contains_pointer {
                 // Dragging into this widget - easy case:
                 Some(galley.cursor_from_pos((galley_from_global * pointer_pos).to_vec2()))
             } else if is_in_same_column
@@ -432,12 +635,10 @@ impl ViewportLabelSelectionState {
         let has_secondary = response.id == selection.secondary.widget_id;
 
         if has_primary {
-            selection.primary.pos =
-                global_from_galley * pos_in_galley(galley, selection.primary.ccursor);
+            selection.primary.update_pos(global_from_galley, galley);
         }
         if has_secondary {
-            selection.secondary.pos =
-                global_from_galley * pos_in_galley(galley, selection.secondary.ccursor);
+            selection.secondary.update_pos(global_from_galley, galley);
         }
 
         self.has_reached_primary |= has_primary;
@@ -541,8 +742,13 @@ impl ViewportLabelSelectionState {
             ui.set_cursor_icon(CursorIcon::Text);
         }
 
+        let is_touch = ui.input(|i| i.has_touch_screen());
+
         self.any_hovered |= response.hovered();
-        self.is_dragging |= response.is_pointer_button_down_on(); // we don't want the initial latency of drag vs click decision
+        if !is_touch {
+            // On a touch screen the press is as likely a scroll, and labels don't sense drags there.
+            self.is_dragging |= response.is_pointer_button_down_on(); // we don't want the initial latency of drag vs click decision
+        }
 
         let old_selection = self.selection;
 
@@ -560,6 +766,43 @@ impl ViewportLabelSelectionState {
             // Actual drag-to-select happens elsewhere.
             let dragged = false;
             cursor_state.pointer_interaction(ui, response, cursor_at_pointer, galley, dragged);
+
+            if is_touch {
+                if response.long_touched() {
+                    // A long press is how touch screens start a selection.
+                    let word = select_word_at(galley.text(), cursor_at_pointer);
+                    cursor_state.set_char_range(Some(word));
+                } else if response.clicked()
+                    && !response.double_clicked()
+                    && !response.triple_clicked()
+                {
+                    self.deselect_requested = true;
+                }
+            }
+        }
+
+        let select_all = self.select_all_requested
+            && self
+                .selection
+                .is_some_and(|s| s.primary.widget_id == response.id && s.layer_id == response.layer_id);
+        if select_all {
+            self.select_all_requested = false;
+            let all = CCursorRange::select_all(galley);
+            cursor_state.set_char_range(Some(all));
+            self.selection = Some(CurrentSelection {
+                layer_id: response.layer_id,
+                primary: WidgetTextCursor::new(widget_id, all.primary, global_from_galley, galley),
+                secondary: WidgetTextCursor::new(
+                    widget_id,
+                    all.secondary,
+                    global_from_galley,
+                    galley,
+                ),
+            });
+            self.has_reached_primary = true;
+            self.has_reached_secondary = true;
+            // Labels before this one already painted their part of the old selection.
+            ui.ctx().request_repaint();
         }
 
         if let Some(mut cursor_range) = cursor_state.range(galley) {
@@ -574,6 +817,24 @@ impl ViewportLabelSelectionState {
 
             if got_copy_event(ui.ctx()) {
                 self.copy_text(galley_rect, galley, &cursor_range);
+            }
+
+            if !cursor_range.is_empty() {
+                let new_text = selected_text(galley, &cursor_range);
+                append_selected_text(
+                    &mut self.selected_text,
+                    &mut self.last_selected_galley_rect,
+                    galley_rect,
+                    galley,
+                    new_text,
+                );
+                let global_from_layer = ui
+                    .ctx()
+                    .layer_transform_to_global(response.layer_id)
+                    .unwrap_or_default();
+                let selected_rect = global_from_galley * selected_rect(galley, &cursor_range);
+                self.selected_rect_this_frame |=
+                    selected_rect.intersect(global_from_layer * ui.clip_rect());
             }
 
             cursor_state.set_char_range(Some(cursor_range));
@@ -675,6 +936,114 @@ impl ViewportLabelSelectionState {
     }
 }
 
+/// Append the selected text of one more label to `text`, separating it from the
+/// previous label's text with a newline or a space depending on how they are laid out.
+fn append_selected_text(
+    text: &mut String,
+    last_galley_rect: &mut Option<Rect>,
+    new_galley_rect: Rect,
+    galley: &Galley,
+    new_text: String,
+) {
+    if new_text.is_empty() {
+        return;
+    }
+
+    let Some(last_rect) = last_galley_rect.filter(|_| !text.is_empty()) else {
+        *text = new_text;
+        *last_galley_rect = Some(new_galley_rect);
+        return;
+    };
+
+    // We need to append or prepend the new text to the already copied text.
+    // We need to do so intelligently.
+
+    if last_rect.bottom() <= new_galley_rect.top() {
+        text.push('\n');
+        let vertical_distance = new_galley_rect.top() - last_rect.bottom();
+        if estimate_row_height(galley) * 0.5 < vertical_distance {
+            text.push('\n');
+        }
+    } else {
+        let existing_ends_with_space = text.chars().last().map(|c| c.is_whitespace());
+
+        let new_text_starts_with_space_or_punctuation = new_text
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_whitespace() || c.is_ascii_punctuation());
+
+        if existing_ends_with_space == Some(false) && !new_text_starts_with_space_or_punctuation {
+            text.push(' ');
+        }
+    }
+
+    text.push_str(&new_text);
+    *last_galley_rect = Some(new_galley_rect);
+}
+
+/// The part of the galley covered by a selection, in galley coordinates.
+///
+/// One row: just the selected run. Several rows: the full width of the galley.
+fn selected_rect(galley: &Galley, cursor_range: &CCursorRange) -> Rect {
+    let [min, max] = cursor_range.sorted_cursors();
+    let first = galley.pos_from_cursor(min);
+    let last = galley.pos_from_cursor(max);
+    if (first.top() - last.top()).abs() < 0.5 {
+        Rect::from_min_max(first.min, pos2(last.max.x, last.bottom()))
+    } else {
+        Rect::from_x_y_ranges(galley.rect.x_range(), first.top()..=last.bottom())
+    }
+}
+
+/// Does the cursor at `a` come before the one at `b` in reading order?
+fn reads_before(a: Rect, b: Rect) -> bool {
+    let same_row = (a.center().y - b.center().y).abs() < 0.5 * a.height().min(b.height());
+    if same_row {
+        a.center().x <= b.center().x
+    } else {
+        a.center().y < b.center().y
+    }
+}
+
+/// A touch handle at one end of the selection: a bar along the cursor with a knob
+/// above the start or below the end.
+struct Handle {
+    bar: Rect,
+    knob_center: Pos2,
+    knob_radius: f32,
+
+    /// What the finger has to hit: wider than the drawing so it is easy to grab.
+    hit_rect: Rect,
+}
+
+impl Handle {
+    fn new(end: HandleEnd, cursor_rect: Rect) -> Self {
+        let knob_radius = 5.0;
+        let bar = Rect::from_center_size(cursor_rect.center(), vec2(2.0, cursor_rect.height()));
+        let knob_center = match end {
+            HandleEnd::Start => pos2(bar.center().x, bar.top() - knob_radius),
+            HandleEnd::End => pos2(bar.center().x, bar.bottom() + knob_radius),
+        };
+        let drawn = bar.union(Rect::from_center_size(knob_center, Vec2::splat(2.0 * knob_radius)));
+        let min_touch_size = 32.0;
+        let hit_rect = drawn.expand2(vec2(
+            (0.5 * (min_touch_size - drawn.width())).max(0.0),
+            (0.5 * (min_touch_size - drawn.height())).max(4.0),
+        ));
+        Self {
+            bar,
+            knob_center,
+            knob_radius,
+            hit_rect,
+        }
+    }
+
+    fn paint(&self, painter: &crate::Painter, color: epaint::Color32) {
+        painter.rect_filled(self.bar, 0.0, color);
+        painter.circle_filled(self.knob_center, self.knob_radius, color);
+    }
+}
+
 fn got_copy_event(ctx: &Context) -> bool {
     ctx.input(|i| {
         i.events
@@ -752,6 +1121,7 @@ mod tests {
             widget_id: Id::unique("selected_label"),
             ccursor: CCursor::default(),
             pos: Pos2::ZERO,
+            rect: Rect::ZERO,
         };
         CurrentSelection {
             layer_id: LayerId::background(),
