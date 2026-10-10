@@ -461,9 +461,15 @@ impl ViewportLabelSelectionState {
 
         let (primary, secondary) = (selection.primary, selection.secondary);
         let ends = if primary_first {
-            [(HandleEnd::Start, primary, true), (HandleEnd::End, secondary, false)]
+            [
+                (HandleEnd::Start, primary, true),
+                (HandleEnd::End, secondary, false),
+            ]
         } else {
-            [(HandleEnd::Start, secondary, false), (HandleEnd::End, primary, true)]
+            [
+                (HandleEnd::Start, secondary, false),
+                (HandleEnd::End, primary, true),
+            ]
         };
 
         let mut rects = Vec::with_capacity(2);
@@ -782,9 +788,9 @@ impl ViewportLabelSelectionState {
         }
 
         let select_all = self.select_all_requested
-            && self
-                .selection
-                .is_some_and(|s| s.primary.widget_id == response.id && s.layer_id == response.layer_id);
+            && self.selection.is_some_and(|s| {
+                s.primary.widget_id == response.id && s.layer_id == response.layer_id
+            });
         if select_all {
             self.select_all_requested = false;
             let all = CCursorRange::select_all(galley);
@@ -1024,7 +1030,10 @@ impl Handle {
             HandleEnd::Start => pos2(bar.center().x, bar.top() - knob_radius),
             HandleEnd::End => pos2(bar.center().x, bar.bottom() + knob_radius),
         };
-        let drawn = bar.union(Rect::from_center_size(knob_center, Vec2::splat(2.0 * knob_radius)));
+        let drawn = bar.union(Rect::from_center_size(
+            knob_center,
+            Vec2::splat(2.0 * knob_radius),
+        ));
         let min_touch_size = 32.0;
         let hit_rect = drawn.expand2(vec2(
             (0.5 * (min_touch_size - drawn.width())).max(0.0),
