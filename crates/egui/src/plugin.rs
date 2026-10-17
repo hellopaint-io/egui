@@ -198,9 +198,15 @@ impl PluginsOrdered {
     #[cfg(debug_assertions)]
     pub fn on_widget_under_pointer(&self, ctx: &Context, widget: &crate::WidgetRect) {
         profiling::scope!("plugins", "on_widget_under_pointer");
-        self.for_each_dyn(|plugin| {
-            plugin.on_widget_under_pointer(ctx, widget);
-        });
+        // A plugin can create widgets while one of its own hooks runs (the label selection
+        // handles are `Area`s shown from `on_end_pass`), so its lock is already held here.
+        // Skip it instead of locking it a second time.
+        for plugin in &self.0 {
+            let Some(mut plugin) = plugin.try_lock() else {
+                continue;
+            };
+            plugin.dyn_plugin_mut().on_widget_under_pointer(ctx, widget);
+        }
     }
 }
 
@@ -262,6 +268,41 @@ impl Plugin for CallbackPlugin {
         for (_debug_name, cb) in &self.on_end_plugins {
             profiling::scope!("on_end_pass", *_debug_name);
             (cb)(ui);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{Area, Context, Event, Id, Plugin, RawInput, Sense, Ui, pos2, vec2};
+
+    struct AreaPlugin;
+
+    impl Plugin for AreaPlugin {
+        fn debug_name(&self) -> &'static str {
+            "AreaPlugin"
+        }
+
+        fn on_end_pass(&mut self, ui: &mut Ui) {
+            Area::new(Id::new("plugin_area"))
+                .fixed_pos(pos2(0.0, 0.0))
+                .show(ui.ctx(), |ui| {
+                    ui.allocate_exact_size(vec2(100.0, 100.0), Sense::click());
+                });
+        }
+    }
+
+    /// A widget a plugin shows from its own hook, under the pointer, must not lock the plugin twice.
+    #[test]
+    fn plugin_shows_widget_under_pointer() {
+        let ctx = Context::default();
+        ctx.add_plugin(AreaPlugin);
+        for _ in 0..3 {
+            let input = RawInput {
+                events: vec![Event::PointerMoved(pos2(50.0, 50.0))],
+                ..Default::default()
+            };
+            ctx.run_ui(input, |_| {}).textures_delta.clear();
         }
     }
 }

@@ -41,6 +41,12 @@ impl<T> Mutex<T> {
             self.0.lock()
         }
     }
+
+    /// Acquire the lock only if nobody holds it right now.
+    #[inline(always)]
+    pub fn try_lock(&self) -> Option<MutexGuard<'_, T>> {
+        self.0.try_lock()
+    }
 }
 
 // ----------------------------------------------------------------------------
