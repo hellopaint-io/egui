@@ -3,8 +3,8 @@ use core::ops::Range;
 use emath::RectAlign;
 
 use crate::{
-    Atom, Atoms, Button, Event, EventFilter, Id, InputState, IntoAtoms, Key, Popup, PopupKind,
-    Rect, ScrollArea, TextEdit, Ui, WidgetText,
+    Atom, Atoms, Button, Event, EventFilter, Frame, Id, InputState, IntoAtoms, Key, Popup,
+    PopupKind, Rect, ScrollArea, TextEdit, Ui, WidgetText,
     class::{ClassName, HasClasses as _},
     text::{CCursor, CCursorRange, CharIndex},
     vec2,
@@ -102,6 +102,9 @@ struct CompletionState {
 
     /// Where the popup was last shown, to tell a click on it from a click elsewhere.
     popup_rect: Option<Rect>,
+
+    /// How tall the whole list of suggestions was last shown, to pick the side with room for it.
+    list_height: Option<f32>,
 }
 
 impl CompletionState {
@@ -216,6 +219,7 @@ impl<'a> CompletionPopup<'a> {
     }
 
     /// Maximum height of the popup before it starts to scroll.
+    /// It scrolls sooner if the screen has less room on the side it opens to.
     ///
     /// Default: 200.0.
     #[inline]
@@ -332,16 +336,39 @@ impl<'a> CompletionPopup<'a> {
             && !suggestions.is_empty()
             && accepted_index.is_none();
 
+        // The list is sized here rather than by what is left of the popup: the popup's area is
+        // only as tall as it was last frame, so a list that filled that could never grow past
+        // the suggestions the popup opened with. It opens on the side with room for the whole
+        // list, or else the side with more room, and is as tall as that side allows.
+        let frame_height = Frame::popup(ui.style()).total_margin().sum().y;
+        let room = |align: RectAlign| {
+            let content_rect = ui.ctx().content_rect();
+            let tallest = align.align_rect(
+                &response.rect,
+                vec2(response.rect.width(), content_rect.height()),
+                0.0,
+            );
+            (tallest.intersect(content_rect).height() - frame_height).max(0.0)
+        };
+        let wanted = state.list_height.unwrap_or(max_height).min(max_height);
+        let align = if room(align) < wanted && room(align) < room(align.flipped_y()) {
+            align.flipped_y()
+        } else {
+            align
+        };
+        let list_height = room(align).min(max_height);
+
         let popup = Popup::from_response(&response)
             .id(id.with("completion_popup"))
             .kind(PopupKind::Popup)
             .open(is_open)
             .align(align)
-            .align_alternatives(&[align.flipped_y()])
+            .align_alternatives(&[])
             .width(response.rect.width())
             .show(|ui| {
-                ScrollArea::vertical()
-                    .max_height(max_height)
+                let list = ScrollArea::vertical()
+                    .max_height(list_height)
+                    .min_scrolled_height(list_height)
                     .show(ui, |ui| {
                         let pointer_moved = ui.input(|input| input.pointer.is_moving());
                         let mut clicked = None;
@@ -363,11 +390,21 @@ impl<'a> CompletionPopup<'a> {
                             }
                         }
                         clicked
-                    })
-                    .inner
+                    });
+                (list.inner, list.content_size.y)
             });
-        state.popup_rect = popup.as_ref().map(|popup| popup.response.rect);
-        let clicked = popup.and_then(|popup| popup.inner);
+        let popup_rect = popup.as_ref().map(|popup| popup.response.rect);
+        if popup_rect.map(|rect| rect.size()) != state.popup_rect.map(|rect| rect.size()) {
+            // A popup above the field is placed by its bottom edge, which takes the new size a
+            // frame to catch up with:
+            ui.ctx().request_repaint();
+        }
+        state.popup_rect = popup_rect;
+        let clicked = popup.and_then(|popup| {
+            let (clicked, list_height) = popup.inner;
+            state.list_height = Some(list_height);
+            clicked
+        });
 
         if clicked.is_some() {
             accepted_index = clicked;

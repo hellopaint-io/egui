@@ -39,6 +39,7 @@ struct State {
     text: String,
     submitted: Option<String>,
     popup_open: bool,
+    field_rect: Option<egui::Rect>,
 }
 
 fn harness<'a>() -> Harness<'a, State> {
@@ -57,14 +58,24 @@ fn chat_harness<'a>() -> Harness<'a, State> {
 fn harness_with<'a>(
     make_text_edit: impl for<'t> Fn(&'t mut String) -> TextEdit<'t> + 'a,
 ) -> Harness<'a, State> {
+    harness_at(0.0, make_text_edit)
+}
+
+/// The text field `top` points down the 800×600 screen.
+fn harness_at<'a>(
+    top: f32,
+    make_text_edit: impl for<'t> Fn(&'t mut String) -> TextEdit<'t> + 'a,
+) -> Harness<'a, State> {
     let mut harness = Harness::new_ui_state(
         move |ui, state: &mut State| {
+            ui.add_space(top);
             let output = CompletionPopup::new(id()).show(
                 ui,
                 make_text_edit(&mut state.text),
                 suggest_commands,
             );
             state.popup_open = output.is_open;
+            state.field_rect = Some(output.text_edit.response.response.rect);
             let response = &output.text_edit.response.response;
             let enter = response.has_focus()
                 && ui.input_mut(|input| {
@@ -257,4 +268,85 @@ fn clicking_a_suggestion_accepts_it() {
         assert!(!harness.state().popup_open, "{surrender_focus_on:?}");
         assert!(text_input_has_focus(&harness), "{surrender_focus_on:?}");
     }
+}
+
+fn single_line(text: &mut String) -> TextEdit<'_> {
+    TextEdit::singleline(text).hint_text("Message")
+}
+
+fn popup_rect(harness: &Harness<'_, State>) -> egui::Rect {
+    harness
+        .ctx
+        .memory(|mem| mem.area_rect(id().with("completion_popup")))
+        .unwrap()
+}
+
+/// The popup is as tall as its suggestions, however many it was opened with:
+/// opened on two and then given six, it fits all six rather than scrolling
+/// them in the space two took.
+#[test]
+fn popup_grows_with_its_suggestions() {
+    // The field near the bottom, so the popup opens above it.
+    let mut fresh = harness_at(500.0, single_line);
+    text_input(&fresh).type_text("/");
+    fresh.run();
+    let six = popup_rect(&fresh);
+
+    let mut harness = harness_at(500.0, single_line);
+    text_input(&harness).type_text("/gr");
+    harness.run();
+    let two = popup_rect(&harness);
+    assert!(two.height() < six.height(), "{two:?} against {six:?}");
+
+    harness.key_press(Key::Backspace);
+    harness.key_press(Key::Backspace);
+    harness.run();
+    assert_eq!(harness.state().text, "/");
+    let grown = popup_rect(&harness);
+    assert_eq!(grown.size(), six.size());
+    let field = harness.state().field_rect.unwrap();
+    assert!(
+        grown.bottom() <= field.top(),
+        "the popup covers the field: {grown:?}, field {field:?}"
+    );
+}
+
+/// The popup opens on the side with room for its suggestions, and is no
+/// taller than that side has room for.
+#[test]
+fn popup_fits_the_side_it_opens_to() {
+    // Above is preferred, but 40 points is too little for six suggestions:
+    let mut harness = harness_at(40.0, single_line);
+    text_input(&harness).type_text("/");
+    harness.run();
+    let below = popup_rect(&harness);
+    let field = harness.state().field_rect.unwrap();
+    assert!(field.bottom() <= below.top(), "{below:?}, field {field:?}");
+
+    // On a short screen neither side has room for all six. The popup takes
+    // the side with more room, and scrolls its list rather than leave the
+    // screen or cover the field.
+    let mut harness = Harness::builder().with_size((800.0, 200.0)).build_ui_state(
+        |ui, state: &mut State| {
+            ui.add_space(110.0);
+            let output = CompletionPopup::new(id()).max_height(1000.0).show(
+                ui,
+                TextEdit::singleline(&mut state.text).hint_text("Message"),
+                suggest_commands,
+            );
+            state.popup_open = output.is_open;
+            state.field_rect = Some(output.text_edit.response.response.rect);
+        },
+        State::default(),
+    );
+    harness.run();
+    text_input(&harness).focus();
+    harness.run();
+    text_input(&harness).type_text("/");
+    harness.run();
+    assert!(harness.state().popup_open);
+    let above = popup_rect(&harness);
+    let field = harness.state().field_rect.unwrap();
+    assert!(above.bottom() <= field.top(), "{above:?}, field {field:?}");
+    assert!(0.0 <= above.top(), "{above:?}");
 }
