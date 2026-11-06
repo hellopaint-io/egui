@@ -6,7 +6,7 @@ use crate::{Area, Color32, Context, Frame, Id, InnerResponse, Order, Response, S
 /// a click landed outside `content_rect` (i.e. on the backdrop).
 ///
 /// This is used by both [`Modal`] and [`crate::Popup`].
-pub(crate) fn paint_backdrop(ui: &mut Ui, color: Color32) -> bool {
+pub(crate) fn paint_backdrop(ui: &Ui, color: Color32) -> bool {
     let bg_rect = ui.ctx().viewport_rect();
 
     let response = ui.interact(

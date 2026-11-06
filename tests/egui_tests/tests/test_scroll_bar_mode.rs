@@ -49,14 +49,16 @@ fn drag_bar(mode: ScrollBarMode) -> Probe {
         bar_widths: vec![],
     };
     for input in frames {
-        let output = ctx.run_ui(input, |ui| {
+        let mut output = ctx.run_ui(input, |ui| {
             let out = ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                 for i in 0..100 {
                     ui.label(format!("row {i}"));
                 }
             });
-            probe.offset = out.state.offset.y;
+            probe.offset = out.state.clamped_offset().y;
         });
+        // Nothing renders here, so the font atlas upload is dropped on purpose.
+        output.textures_delta.clear();
 
         let mut rects = vec![];
         for clipped in &output.shapes {

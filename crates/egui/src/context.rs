@@ -1,7 +1,7 @@
 #![warn(missing_docs)] // Let's keep `Context` well-documented.
 
+use alloc::{borrow::Cow, sync::Arc};
 use core::{cell::RefCell, panic::Location, time::Duration};
-use std::{borrow::Cow, sync::Arc};
 
 use emath::GuiRounding as _;
 use epaint::{
@@ -47,7 +47,8 @@ use crate::IdMap;
 
 /// Information given to the backend about when it is time to repaint the ui.
 ///
-/// This is given in the callback set by [`Context::set_request_repaint_callback`].
+/// This is given in the callback set by [`Context::set_request_repaint_callback`],
+/// and to the observer set by [`Context::set_repaint_observer`].
 #[derive(Clone, Copy, Debug)]
 pub struct RequestRepaintInfo {
     /// This is used to specify what viewport that should repaint.
@@ -150,6 +151,16 @@ impl ContextImpl {
 
         viewport.repaint.causes.push(cause);
 
+        let info = RequestRepaintInfo {
+            viewport_id,
+            delay,
+            current_cumulative_pass_nr: viewport.repaint.cumulative_pass_nr,
+        };
+
+        if let Some(observer) = &self.repaint_observer {
+            (observer)(info);
+        }
+
         // We save some CPU time by only calling the callback if we need to.
         // If the new delay is greater or equal to the previous lowest,
         // it means we have already called the callback, and don't need to do it again.
@@ -157,11 +168,7 @@ impl ContextImpl {
             viewport.repaint.repaint_delay = delay;
 
             if let Some(callback) = &self.request_repaint_callback {
-                (callback)(RequestRepaintInfo {
-                    viewport_id,
-                    delay,
-                    current_cumulative_pass_nr: viewport.repaint.cumulative_pass_nr,
-                });
+                (callback)(info);
             }
         }
     }
@@ -434,6 +441,7 @@ struct ContextImpl {
     paint_stats: PaintStats,
 
     request_repaint_callback: Option<Box<dyn Fn(RequestRepaintInfo) + Send + Sync>>,
+    repaint_observer: Option<Box<dyn Fn(RequestRepaintInfo) + Send + Sync>>,
 
     viewport_parents: ViewportIdMap<ViewportId>,
     viewports: ViewportIdMap<ViewportState>,
@@ -641,7 +649,13 @@ impl ContextImpl {
     }
 
     fn accesskit_node_builder(&mut self, id: Id) -> Option<&mut accesskit::Node> {
-        let state = self.viewport().this_pass.accesskit_state.as_mut()?;
+        let this_pass = &mut self.viewport().this_pass;
+        let state = this_pass.accesskit_state.as_mut()?;
+
+        if !is_accesskit_visible(&this_pass.widgets, &state.parent_map, id) {
+            return None;
+        }
+
         let builders = &mut state.nodes;
 
         if let std::collections::hash_map::Entry::Vacant(entry) = builders.entry(id) {
@@ -1528,7 +1542,7 @@ impl Context {
 
         if allow_focus && !interested_in_focus {
             // Not interested or allowed input:
-            self.memory_mut(|mem| mem.surrender_focus(w.id));
+            self.memory_mut(|mem| mem.ignore_focus(w.id));
         }
 
         if w.sense.interactive() || w.sense.is_focusable() {
@@ -1549,6 +1563,11 @@ impl Context {
             // TODO(mwcampbell): For nodes that are filled from widget info,
             // some information is written to the node twice.
             self.accesskit_node_builder(w.id, |builder| res.fill_accesskit_node_common(builder));
+        }
+
+        // A `Ui` registers with `Rect::NOTHING` before its real rect is known; scrolling needs the real one.
+        if w.rect == Rect::NOTHING {
+            return res;
         }
 
         self.write(|ctx| {
@@ -1598,6 +1617,21 @@ impl Context {
         });
 
         res
+    }
+
+    /// Allow widgets inside `rect` to intentionally change ids during the current pass.
+    ///
+    /// This suppresses [`crate::style::DebugOptions::warn_if_rect_changes_id`] for widgets
+    /// fully contained by `rect`. Use this for regions that intentionally replace their widget
+    /// set, such as a data-driven table after its backing collection changes.
+    ///
+    /// This has no effect on duplicate-id checks or widget interaction.
+    pub fn allow_widget_id_changes_in(&self, rect: Rect) {
+        #[cfg(debug_assertions)]
+        self.pass_state_mut(|state| state.widget_id_change_warning_exclusions.push(rect));
+
+        #[cfg(not(debug_assertions))]
+        let _ = (self, rect);
     }
 
     /// Read the response of some widget, which may be called _before_ creating the widget (!).
@@ -1688,6 +1722,7 @@ impl Context {
             interact_rect,
             sense,
             enabled,
+            visible,
         } = widget_rect;
 
         // previous pass + "highlight next pass" == "highlight this pass"
@@ -1706,6 +1741,7 @@ impl Context {
         };
 
         res.flags.set(Flags::ENABLED, enabled);
+        res.flags.set(Flags::VISIBLE, visible);
         res.flags.set(Flags::HIGHLIGHTED, highlighted);
 
         self.write(|ctx| {
@@ -1847,6 +1883,24 @@ impl Context {
     /// Paint on top of _everything_ else (even on top of tooltips and popups).
     pub fn debug_painter(&self) -> Painter {
         Self::layer_painter(self, LayerId::debug())
+    }
+
+    /// Is the user holding down all modifier keys to inspect widgets on hover?
+    ///
+    /// See [`crate::style::DebugOptions::debug_on_hover_with_all_modifiers`].
+    ///
+    /// Always returns `false` unless compiled with `debug_assertions`.
+    pub fn is_inspecting_widgets(&self) -> bool {
+        cfg_select! {
+            debug_assertions => {
+                self.global_style().debug.debug_on_hover_with_all_modifiers
+                    && self.input(|i| i.modifiers.all())
+            }
+            _ => {
+                _ = self;
+                false
+            }
+        }
     }
 
     /// Print this text next to the cursor at the end of the pass.
@@ -2217,6 +2271,28 @@ impl Context {
     ) {
         let callback = Box::new(callback);
         self.write(|ctx| ctx.request_repaint_callback = Some(callback));
+    }
+
+    /// For integrations: this observer will be called for every repaint request,
+    /// i.e. every call to [`Self::request_repaint`], [`Self::request_repaint_after`] and their variants,
+    /// including the ones egui makes itself.
+    ///
+    /// The callback set with [`Self::set_request_repaint_callback`] is only called when a request
+    /// makes the next repaint of a viewport come sooner. The observer also sees the requests
+    /// that don't, e.g. a request for a later delay than one already scheduled.
+    /// An integration can use this to see everything that was requested during a pass,
+    /// for instance to make its own scheduling decisions, or to count repaint requests.
+    ///
+    /// The observer is called on the thread that made the request, while the [`Context`] is locked,
+    /// so it must not call back into the [`Context`].
+    ///
+    /// Note that only one observer can be set. Any new call overrides the previous observer.
+    pub fn set_repaint_observer(
+        &self,
+        observer: impl Fn(RequestRepaintInfo) + Send + Sync + 'static,
+    ) {
+        let observer = Box::new(observer);
+        self.write(|ctx| ctx.repaint_observer = Some(observer));
     }
 
     /// Request to discard the visual output of this pass,
@@ -2865,7 +2941,10 @@ impl Context {
         self.sync_window_theme();
 
         #[cfg(debug_assertions)]
-        self.debug_painting();
+        {
+            self.debug_painting();
+            crate::id::id_source::end_pass();
+        }
 
         let mut output = self.write(|ctx| ctx.end_pass());
 
@@ -3105,6 +3184,12 @@ impl ContextImpl {
             let state = viewport.this_pass.accesskit_state.take();
             if let Some(state) = state {
                 let root_id = crate::accesskit_root_id().accesskit_id();
+                // A widget can have focus without a node, e.g. if it requested focus while invisible.
+                let focus_id = self
+                    .memory
+                    .focused()
+                    .filter(|id| state.nodes.contains_key(id))
+                    .map_or(root_id, |id| id.accesskit_id());
                 // The `(id, node)` pairs of the coming `accesskit::TreeUpdate`:
                 let mut nodes: Vec<(accesskit::NodeId, accesskit::Node)> = state
                     .nodes
@@ -3112,13 +3197,9 @@ impl ContextImpl {
                     .map(|(id, node)| (id.accesskit_id(), node))
                     .collect();
                 flatten_labelled_by(&mut nodes);
-                let focus_id = self
-                    .memory
-                    .focused()
-                    .map_or(root_id, |id| id.accesskit_id());
                 platform_output.accesskit_update = Some(accesskit::TreeUpdate {
                     nodes,
-                    tree: Some(accesskit::Tree::new(root_id)),
+                    tree: Some(accesskit::TreeInfo::new(root_id)),
                     tree_id: accesskit::TreeId::ROOT,
                     focus: focus_id,
                 });
@@ -3146,6 +3227,7 @@ impl ContextImpl {
                 &mut shapes,
                 &viewport.prev_pass.widgets,
                 &viewport.this_pass.widgets,
+                &viewport.this_pass.widget_id_change_warning_exclusions,
             );
             shapes
         } else {
@@ -3306,7 +3388,7 @@ impl Context {
                 tessellator::Tessellator::new(
                     pixels_per_point,
                     tessellation_options,
-                    texture_atlas.size(),
+                    texture_atlas.resolution(),
                     texture_atlas.prepared_discs(),
                 )
                 .tessellate_shapes(shapes)
@@ -3517,6 +3599,25 @@ impl Context {
     pub fn transform_layer_shapes(&self, layer_id: LayerId, transform: TSTransform) {
         if transform != TSTransform::IDENTITY {
             self.graphics_mut(|g| g.entry(layer_id).transform(transform));
+        }
+    }
+
+    /// Transform all the graphics at the given layer, but only after they have been tessellated and
+    /// snapped to the pixel grid.
+    ///
+    /// Unlike [`Self::transform_layer_shapes`], the snapping happens in the layer's own
+    /// coordinates, so the rendering converges on the untransformed one.
+    /// Use this for an animation that ends at [`TSTransform::IDENTITY`], such as a popup scaling
+    /// into place: it doesn't end with a jump of up to a pixel.
+    /// See [`epaint::ClippedShape::transform_after_tessellation`] for the trade-off.
+    ///
+    /// This only applies to the existing graphics at the layer, not to graphics added later, so
+    /// call it once the layer is complete — [`crate::Plugin::on_end_pass`] is a good place.
+    ///
+    /// Interaction is unaffected: the layer keeps its own input coordinates.
+    pub fn transform_layer_shapes_after_rounding(&self, layer_id: LayerId, transform: TSTransform) {
+        if transform != TSTransform::IDENTITY {
+            self.graphics_mut(|g| g.entry(layer_id).transform_after_rounding(transform));
         }
     }
 
@@ -3844,7 +3945,7 @@ impl Context {
         CollapsingHeader::new("🔠 Font texture")
             .default_open(false)
             .show(ui, |ui| {
-                let font_image_size = self.fonts(|f| f.font_image_size());
+                let font_image_size = self.fonts(|f| f.font_image_resolution());
                 crate::introspection::font_texture_ui(ui, font_image_size);
             });
 
@@ -3902,7 +4003,7 @@ impl Context {
                         .min_row_height(max_preview_size.y)
                         .show(ui, |ui| {
                             for (&texture_id, meta) in textures {
-                                let [w, h] = meta.size;
+                                let [w, h] = meta.resolution;
                                 let point_size = vec2(w as f32, h as f32) / pixels_per_point;
 
                                 let mut size = point_size;
@@ -4099,7 +4200,8 @@ impl Context {
     ///
     /// The `Context` lock is held while the given closure is called!
     ///
-    /// Returns `None` if accesskit is off.
+    /// Returns `None` if accesskit is off,
+    /// or if the widget is invisible (see [`Ui::is_visible`]).
     // TODO(emilk): consider making both read-only and read-write versions
     pub fn accesskit_node_builder<R>(
         &self,
@@ -4457,7 +4559,7 @@ impl Context {
     /// This doesn't request a new frame when the data arrives. Call `ctx.request_repaint` if needed.
     pub fn request_screenshot(
         &self,
-        callback: impl FnOnce(std::sync::Arc<crate::ColorImage>) + Send + 'static,
+        callback: impl FnOnce(Arc<crate::ColorImage>) + Send + 'static,
     ) {
         self.send_viewport_cmd(ViewportCommand::Screenshot(crate::ScreenshotCallback::new(
             callback,
@@ -4712,11 +4814,12 @@ impl Context {
     }
 }
 
-#[test]
-fn context_impl_send_sync() {
-    fn assert_send_sync<T: Send + Sync>() {}
+// Compile-time check that `Context` is `Send + Sync` on every target.
+// Deliberately not a `#[test]`: tests never run on wasm, but `cargo check` does.
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<Context>();
-}
+};
 
 /// Check if any [`Rect`] appears with different [`Id`]s between two passes.
 ///
@@ -4727,10 +4830,11 @@ fn warn_if_rect_changes_id(
     out_shapes: &mut Vec<ClippedShape>,
     prev_widgets: &crate::WidgetRects,
     new_widgets: &crate::WidgetRects,
+    exclusions: &[Rect],
 ) {
     profiling::function_scope!();
 
-    use std::collections::BTreeMap;
+    use alloc::collections::BTreeMap;
 
     /// A wrapper around [`Rect`] that implements [`Ord`] using the bit representation of its floats.
     #[derive(Clone, Copy, PartialEq, Eq)]
@@ -4770,8 +4874,16 @@ fn warn_if_rect_changes_id(
         let prev = create_lookup(prev_widgets.get_layer(*layer_id));
         let new = create_lookup(new_layer_widgets.iter());
 
-        for (hashable_rect, new_at_rect) in new {
-            let Some(prev_at_rect) = prev.get(&hashable_rect) else {
+        for (hashable_rect, new_at_rect) in &new {
+            let rect = new_at_rect[0].rect;
+            if exclusions
+                .iter()
+                .any(|exclusion| exclusion.contains_rect(rect))
+            {
+                continue;
+            }
+
+            let Some(prev_at_rect) = prev.get(hashable_rect) else {
                 continue; // this rect did not exist in the previous pass
             };
 
@@ -4789,6 +4901,23 @@ fn warn_if_rect_changes_id(
                 continue;
             }
 
+            // If a new id at this rect existed elsewhere in the previous pass, and its previous
+            // rect is now empty, then a widget genuinely moved into a vacated position.
+            //
+            // We deliberately do NOT skip when the previous rect of that widget is still occupied
+            // (by some other id). That is the signature of an automatic id shift (#8092, #8084):
+            // one extra auto id is consumed, so every following widget keeps its rect but takes
+            // the id of its next sibling. Each new id "existed elsewhere last pass", but every
+            // old rect is still filled, so nothing actually moved.
+            let moved_into_vacated_rect = new_at_rect.iter().any(|w| {
+                prev_widgets.get(w.id).is_some_and(|prev_w| {
+                    prev_w.layer_id != *layer_id || !new.contains_key(&OrderedRect(prev_w.rect))
+                })
+            });
+            if moved_into_vacated_rect {
+                continue;
+            }
+
             // Only warn if at least one widget has the same parent_id in both frames.
             // If all parent_ids changed too, this is a cascading id shift, not a widget bug.
             if !prev_at_rect
@@ -4797,8 +4926,6 @@ fn warn_if_rect_changes_id(
             {
                 continue;
             }
-
-            let rect = new_at_rect[0].rect;
 
             log::warn!(
                 "Widget rect {rect:?} changed id between passes: prev ids: {:?}, new ids: {:?}",
@@ -4811,15 +4938,10 @@ fn warn_if_rect_changes_id(
                     .map(|w| w.id.short_debug_format())
                     .collect::<Vec<_>>(),
             );
-            out_shapes.push(ClippedShape {
-                clip_rect: Rect::EVERYTHING,
-                shape: epaint::Shape::rect_stroke(
-                    rect,
-                    0,
-                    (2.0, Color32::RED),
-                    StrokeKind::Outside,
-                ),
-            });
+            out_shapes.push(ClippedShape::new(
+                Rect::EVERYTHING,
+                epaint::Shape::rect_stroke(rect, 0, (2.0, Color32::RED), StrokeKind::Outside),
+            ));
         }
     }
 }
@@ -4831,6 +4953,22 @@ fn warn_if_rect_changes_id(
 /// [`crate::Response::labelled_by`]. Without this, the number field would have no name.
 ///
 /// `nodes` are the `(id, node)` pairs of an [`accesskit::TreeUpdate`].
+/// Invisible widgets (see [`Ui::is_visible`]) are not exposed to accessibility.
+///
+/// Nodes that aren't widgets themselves (e.g. text runs) inherit the visibility
+/// of their closest ancestor that is.
+fn is_accesskit_visible(widgets: &crate::WidgetRects, parent_map: &IdMap<Id>, mut id: Id) -> bool {
+    loop {
+        if let Some(widget) = widgets.get(id) {
+            return widget.visible;
+        }
+        match parent_map.get(&id) {
+            Some(parent_id) => id = *parent_id,
+            None => return true,
+        }
+    }
+}
+
 fn flatten_labelled_by(nodes: &mut [(accesskit::NodeId, accesskit::Node)]) {
     profiling::function_scope!();
 
@@ -4885,6 +5023,144 @@ mod test {
     use crate::{FontDefinitions, Panel};
 
     use super::Context;
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn rect_id_change_ignores_widget_moving_into_vacated_rect() {
+        use crate::{Id, InteractOptions, LayerId, Rect, Sense, WidgetRect, WidgetRects, pos2};
+
+        let layer_id = LayerId::background();
+        let parent_id = Id::unique("parent");
+        let vacated_rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(10.0, 10.0));
+        let previous_rect = vacated_rect.translate((0.0, -10.0).into());
+        let old_id = Id::unique("removed");
+        let moved_id = Id::unique("moved");
+
+        let widget = |id, rect| WidgetRect {
+            id,
+            parent_id,
+            layer_id,
+            rect,
+            interact_rect: rect,
+            sense: Sense::hover(),
+            enabled: true,
+            visible: true,
+        };
+
+        let mut previous = WidgetRects::default();
+        previous.insert(
+            layer_id,
+            widget(old_id, vacated_rect),
+            InteractOptions::default(),
+        );
+        previous.insert(
+            layer_id,
+            widget(moved_id, previous_rect),
+            InteractOptions::default(),
+        );
+
+        let mut current = WidgetRects::default();
+        current.insert(
+            layer_id,
+            widget(moved_id, vacated_rect),
+            InteractOptions::default(),
+        );
+
+        let mut shapes = Vec::new();
+        super::warn_if_rect_changes_id(&mut shapes, &previous, &current, &[]);
+
+        assert!(shapes.is_empty());
+    }
+
+    /// Regression test: consuming one extra automatic id shifts every following widget in the
+    /// same parent by one id, while all rects stay the same. That must warn.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn rect_id_change_warns_for_auto_id_shift() {
+        use crate::{Id, InteractOptions, LayerId, Rect, Sense, WidgetRect, WidgetRects, pos2};
+
+        let layer_id = LayerId::background();
+        let parent_id = Id::unique("parent");
+        let auto_id = |i: usize| parent_id.with(i);
+        let rect =
+            |i: usize| Rect::from_min_size(pos2(0.0, 10.0 * i as f32), crate::vec2(100.0, 10.0));
+
+        let widget = |id, rect| WidgetRect {
+            id,
+            parent_id,
+            layer_id,
+            rect,
+            interact_rect: rect,
+            sense: Sense::click(),
+            enabled: true,
+            visible: true,
+        };
+
+        let mut previous = WidgetRects::default();
+        let mut current = WidgetRects::default();
+        for i in 0..5 {
+            previous.insert(
+                layer_id,
+                widget(auto_id(i), rect(i)),
+                InteractOptions::default(),
+            );
+            // One hidden auto id was consumed before these widgets this pass:
+            current.insert(
+                layer_id,
+                widget(auto_id(i + 1), rect(i)),
+                InteractOptions::default(),
+            );
+        }
+
+        let mut shapes = Vec::new();
+        super::warn_if_rect_changes_id(&mut shapes, &previous, &current, &[]);
+
+        assert!(!shapes.is_empty(), "An automatic id shift should warn");
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn rect_id_change_warns_for_new_widget_replacing_existing_widget() {
+        use crate::{Id, InteractOptions, LayerId, Rect, Sense, WidgetRect, WidgetRects, pos2};
+
+        let layer_id = LayerId::background();
+        let parent_id = Id::unique("parent");
+        let rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(10.0, 10.0));
+        let widget = |id| WidgetRect {
+            id,
+            parent_id,
+            layer_id,
+            rect,
+            interact_rect: rect,
+            sense: Sense::hover(),
+            enabled: true,
+            visible: true,
+        };
+
+        let mut previous = WidgetRects::default();
+        previous.insert(
+            layer_id,
+            widget(Id::unique("old")),
+            InteractOptions::default(),
+        );
+
+        let mut current = WidgetRects::default();
+        current.insert(
+            layer_id,
+            widget(Id::unique("new")),
+            InteractOptions::default(),
+        );
+
+        let mut shapes = Vec::new();
+        super::warn_if_rect_changes_id(&mut shapes, &previous, &current, &[]);
+
+        assert_eq!(shapes.len(), 1);
+
+        shapes.clear();
+        super::warn_if_rect_changes_id(&mut shapes, &previous, &current, &[rect]);
+
+        assert!(shapes.is_empty());
+    }
 
     /// Changing the font providers mid-pass must not drop the [`crate::text::Fonts`]
     /// that the rest of the pass is still laying out text with.
@@ -4951,6 +5227,41 @@ mod test {
             ui.ctx().root_ui(|_| {});
         });
         output.drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn test_repaint_observer_sees_every_request() {
+        use alloc::sync::Arc;
+        use core::time::Duration;
+
+        use crate::mutex::Mutex;
+
+        let ctx = Context::default();
+
+        let callback_delays = Arc::new(Mutex::new(Vec::new()));
+        let observer_delays = Arc::new(Mutex::new(Vec::new()));
+        ctx.set_request_repaint_callback({
+            let callback_delays = Arc::clone(&callback_delays);
+            move |info| callback_delays.lock().push(info.delay)
+        });
+        ctx.set_repaint_observer({
+            let observer_delays = Arc::clone(&observer_delays);
+            move |info| observer_delays.lock().push(info.delay)
+        });
+
+        ctx.request_repaint_after(Duration::from_secs(1));
+        ctx.request_repaint_after(Duration::from_secs(2));
+
+        assert_eq!(
+            *callback_delays.lock(),
+            [Duration::from_secs(1)],
+            "The callback is only called when the repaint comes sooner"
+        );
+        assert_eq!(
+            *observer_delays.lock(),
+            [Duration::from_secs(1), Duration::from_secs(2)],
+            "The observer sees every request"
+        );
     }
 
     #[test]

@@ -1,5 +1,5 @@
+use alloc::{borrow::Cow, sync::Arc};
 use core::{slice::Iter, time::Duration};
-use std::{borrow::Cow, sync::Arc};
 
 use emath::{Align, Float as _, GuiRounding as _, NumExt as _, Rot2};
 use epaint::{
@@ -115,7 +115,11 @@ impl<'a> Image<'a> {
         })
     }
 
-    /// Texture options used when creating the texture.
+    /// Texture options used when loading the texture from a uri or bytes.
+    ///
+    /// This is ignored for [`ImageSource::Texture`], since that texture is already created.
+    /// In that case, set the options when creating the texture instead,
+    /// e.g. with [`Context::load_texture`](crate::Context::load_texture).
     #[inline]
     pub fn texture_options(mut self, texture_options: TextureOptions) -> Self {
         self.texture_options = texture_options;
@@ -299,6 +303,15 @@ impl<'a> Image<'a> {
     pub fn size(&self) -> Option<Vec2> {
         match &self.source {
             ImageSource::Texture(texture) => Some(texture.size),
+            ImageSource::Uri(_) | ImageSource::Bytes { .. } => None,
+        }
+    }
+
+    /// The id of the texture, if this image is from [`ImageSource::Texture`].
+    #[inline]
+    pub(crate) fn texture_id(&self) -> Option<epaint::TextureId> {
+        match &self.source {
+            ImageSource::Texture(texture) => Some(texture.id),
             ImageSource::Uri(_) | ImageSource::Bytes { .. } => None,
         }
     }

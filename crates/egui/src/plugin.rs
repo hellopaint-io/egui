@@ -1,7 +1,7 @@
 use crate::{Context, FullOutput, RawInput, Ui};
 use ahash::HashMap;
+use alloc::sync::Arc;
 use epaint::mutex::{Mutex, MutexGuard};
-use std::sync::Arc;
 
 /// A plugin to extend egui.
 ///
@@ -284,7 +284,7 @@ mod tests {
         }
 
         fn on_end_pass(&mut self, ui: &mut Ui) {
-            Area::new(Id::new("plugin_area"))
+            Area::new(Id::unique("plugin_area"))
                 .fixed_pos(pos2(0.0, 0.0))
                 .show(ui.ctx(), |ui| {
                     ui.allocate_exact_size(vec2(100.0, 100.0), Sense::click());
