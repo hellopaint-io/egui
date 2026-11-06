@@ -419,6 +419,20 @@ impl Painter {
                 Primitive::Mesh(mesh) => {
                     self.paint_mesh(mesh);
                 }
+                Primitive::Clear(rect) => {
+                    // `glClear` ignores blending but respects the scissor test, so this only
+                    // clears the clip rect.
+                    set_clip_rect(
+                        &self.gl,
+                        screen_size_px,
+                        pixels_per_point,
+                        clip_rect.intersect(*rect),
+                    );
+                    unsafe {
+                        self.gl.clear_color(0.0, 0.0, 0.0, 0.0);
+                        self.gl.clear(glow::COLOR_BUFFER_BIT);
+                    }
+                }
                 Primitive::Callback(callback) => {
                     if callback.rect.is_positive() {
                         profiling::scope!("callback");

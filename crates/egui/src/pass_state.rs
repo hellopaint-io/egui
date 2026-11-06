@@ -236,6 +236,9 @@ pub struct PassState {
 
     pub accesskit_state: Option<AccessKitPassState>,
 
+    /// The native views on screen this pass, in the order they were added.
+    pub(crate) native_views: Vec<crate::native_view::NativeViewShown>,
+
     /// Highlight these widgets the next pass.
     pub highlight_next_pass: IdSet,
 
@@ -260,6 +263,7 @@ impl Default for PassState {
             drag_scroll_budget: Vec2::ZERO,
             drag_scroll_fling: Vec2::ZERO,
             accesskit_state: None,
+            native_views: Vec::new(),
             highlight_next_pass: Default::default(),
 
             #[cfg(debug_assertions)]
@@ -286,6 +290,7 @@ impl PassState {
             drag_scroll_budget,
             drag_scroll_fling,
             accesskit_state,
+            native_views,
             highlight_next_pass,
 
             #[cfg(debug_assertions)]
@@ -305,6 +310,7 @@ impl PassState {
         *scroll_delta = Default::default();
         *drag_scroll_budget = Vec2::ZERO;
         *drag_scroll_fling = Vec2::ZERO;
+        native_views.clear();
 
         #[cfg(debug_assertions)]
         {

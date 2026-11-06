@@ -113,10 +113,24 @@ impl WebPainterWgpu {
             .get_default_config(&render_state.adapter, 0, 0) // Width/height is set later.
             .ok_or("The surface isn't supported by this adapter")?;
 
+        // Composite the canvas over the page with premultiplied alpha, as a WebGL canvas does,
+        // so that the page shows through the pixels egui leaves transparent. The default alpha
+        // mode is usually `Opaque`. A WebGPU canvas always supports premultiplied alpha, but
+        // wgpu's WebGPU backend only reports `Opaque`.
+        let alpha_modes = surface.get_capabilities(&render_state.adapter).alpha_modes;
+        let alpha_mode = if alpha_modes.contains(&wgpu::CompositeAlphaMode::PreMultiplied)
+            || render_state.adapter.get_info().backend == wgpu::Backend::BrowserWebGpu
+        {
+            wgpu::CompositeAlphaMode::PreMultiplied
+        } else {
+            default_configuration.alpha_mode
+        };
+
         let surface_configuration = wgpu::SurfaceConfiguration {
             format: render_state.target_format,
             present_mode: wgpu_options.surface.present_mode,
             view_formats: vec![render_state.target_format],
+            alpha_mode,
             ..default_configuration
         };
 
