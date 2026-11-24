@@ -1046,27 +1046,39 @@ impl<'t> TextEdit<'t> {
                             }
                         }
                     }
-                    if ui.memory(|mem| mem.owns_ime_events(id)) {
-                        // Set IME output (in screen coords) when text is editable and visible
-                        let to_global = ui
-                            .ctx()
-                            .layer_transform_to_global(ui.layer_id())
-                            .unwrap_or_default();
-                        ui.output_mut(|o| {
-                            o.ime = Some(crate::output::IMEOutput {
-                                purpose: if password {
-                                    IMEPurpose::Password
-                                } else {
-                                    IMEPurpose::Normal
-                                },
-                                rect: to_global * inner_rect,
-                                cursor_rect: to_global * primary_cursor_rect,
-                                should_interrupt_composition: false,
-                            });
-                        });
-                    }
                 }
             }
+        }
+
+        // Set IME output (in screen coords) whenever the text is editable and focused, also
+        // while the text edit is clipped out. A text edit can be out of view for a frame or two
+        // while it keeps the focus, such as while the layout moves up for the on-screen keyboard
+        // and scrolls the text edit back into view. Without IME output for that frame, the
+        // integration takes the editing as over: on the web, eframe moves the focus from its
+        // `<input>` to the canvas, which closes the keyboard again right after it opened.
+        if text.is_mutable()
+            && interactive
+            && ui.memory(|mem| mem.has_focus(id) && mem.owns_ime_events(id))
+            && let Some(cursor_range) = state.cursor.range(&galley)
+        {
+            let primary_cursor_rect = cursor_rect(&galley, &cursor_range.primary, row_height)
+                .translate(galley_pos.to_vec2() - vec2(galley.rect.left(), 0.0));
+            let to_global = ui
+                .ctx()
+                .layer_transform_to_global(ui.layer_id())
+                .unwrap_or_default();
+            ui.output_mut(|o| {
+                o.ime = Some(crate::output::IMEOutput {
+                    purpose: if password {
+                        IMEPurpose::Password
+                    } else {
+                        IMEPurpose::Normal
+                    },
+                    rect: to_global * inner_rect,
+                    cursor_rect: to_global * primary_cursor_rect,
+                    should_interrupt_composition: false,
+                });
+            });
         }
 
         // Report the selection once it has settled (e.g. after a drag):
