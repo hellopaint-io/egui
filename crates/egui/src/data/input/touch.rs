@@ -57,7 +57,6 @@ pub enum TouchTool {
     Eraser,
 }
 
-
 impl From<u64> for TouchId {
     fn from(id: u64) -> Self {
         Self(id)
