@@ -47,9 +47,16 @@ pub enum TouchTool {
     /// A fingertip.
     Finger,
 
-    /// A pen or stylus, either end of it.
+    /// The writing tip of a pen or stylus.
     Pen,
+
+    /// The eraser end of a pen or stylus, for pens that have one.
+    ///
+    /// Backends that can't tell the two ends apart report [`TouchTool::Pen`]
+    /// for both.
+    Eraser,
 }
+
 
 impl From<u64> for TouchId {
     fn from(id: u64) -> Self {

@@ -995,6 +995,7 @@ impl State {
             tool: match touch.tool {
                 winit::event::TouchTool::Finger => egui::TouchTool::Finger,
                 winit::event::TouchTool::Pen => egui::TouchTool::Pen,
+                winit::event::TouchTool::Eraser => egui::TouchTool::Eraser,
                 winit::event::TouchTool::Unknown => egui::TouchTool::Unknown,
             },
         });
